@@ -1,0 +1,15 @@
+out/
+build/
+build-fast/
+build-ninja/
+build2/
+*.exe
+*.pdb
+*.obj
+*.ilk
+*.idb
+*.log
+*.user
+*.vcxproj.user
+*.suo
+.vs/
