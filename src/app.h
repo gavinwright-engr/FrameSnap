@@ -46,6 +46,7 @@ private:
     NOTIFYICONDATAW trayIcon_{};
     HICON trayIconHandle_{};
     ULONG_PTR gdiplusToken_{};
+    std::shared_ptr<ImageData> frozenFrame_;
     std::chrono::microseconds lastOverlayLatency_{};
     bool hotkeyRegistered_{false};
 };

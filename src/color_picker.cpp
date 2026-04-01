@@ -4,7 +4,7 @@ namespace {
 
 constexpr wchar_t kColorPickerClassName[] = L"ScreenshotterColorPicker";
 constexpr int kWheelMargin = 10;
-constexpr int kBottomPreviewHeight = 56;
+constexpr int kBottomPreviewHeight = 66;
 constexpr COLORREF kPickerBackground = RGB(255, 255, 255);
 constexpr COLORREF kPickerBorder = RGB(214, 223, 234);
 
@@ -51,7 +51,7 @@ HWND ColorPickerControl::Handle() const {
 void ColorPickerControl::SetColor(COLORREF color) {
     ColorToHsv(color, hue_, saturation_, value_);
     if (hwnd_ != nullptr) {
-        InvalidateRect(hwnd_, nullptr, TRUE);
+        InvalidateRect(hwnd_, nullptr, FALSE);
     }
 }
 
@@ -76,16 +76,22 @@ void ColorPickerControl::Paint() {
     HDC hdc = BeginPaint(hwnd_, &ps);
     RECT client{};
     GetClientRect(hwnd_, &client);
+    const int width = std::max(1L, client.right - client.left);
+    const int height = std::max(1L, client.bottom - client.top);
+    HDC backDc = CreateCompatibleDC(hdc);
+    HBITMAP backBitmap = CreateCompatibleBitmap(hdc, width, height);
+    HGDIOBJ oldBitmap = SelectObject(backDc, backBitmap);
+
     HBRUSH backgroundBrush = CreateSolidBrush(kPickerBackground);
-    FillRect(hdc, &client, backgroundBrush);
+    FillRect(backDc, &client, backgroundBrush);
     DeleteObject(backgroundBrush);
 
     HPEN borderPen = CreatePen(PS_SOLID, 1, kPickerBorder);
-    HGDIOBJ oldPen = SelectObject(hdc, borderPen);
-    HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
-    RoundRect(hdc, client.left, client.top, client.right, client.bottom, 18, 18);
-    SelectObject(hdc, oldBrush);
-    SelectObject(hdc, oldPen);
+    HGDIOBJ oldPen = SelectObject(backDc, borderPen);
+    HGDIOBJ oldBrush = SelectObject(backDc, GetStockObject(HOLLOW_BRUSH));
+    RoundRect(backDc, client.left, client.top, client.right, client.bottom, 18, 18);
+    SelectObject(backDc, oldBrush);
+    SelectObject(backDc, oldPen);
     DeleteObject(borderPen);
 
     const RECT wheel = WheelRect();
@@ -126,7 +132,7 @@ void ColorPickerControl::Paint() {
             pixels[index + 3] = 255;
         }
     }
-    StretchDIBits(hdc, wheel.left, wheel.top, wheelWidth, wheelHeight, 0, 0, wheelWidth, wheelHeight, pixels.data(), &bmi, DIB_RGB_COLORS, SRCCOPY);
+    StretchDIBits(backDc, wheel.left, wheel.top, wheelWidth, wheelHeight, 0, 0, wheelWidth, wheelHeight, pixels.data(), &bmi, DIB_RGB_COLORS, SRCCOPY);
 
     const RECT valueRect = ValueRect();
     for (int y = valueRect.top; y < valueRect.bottom; ++y) {
@@ -134,26 +140,31 @@ void ColorPickerControl::Paint() {
         const COLORREF color = HsvToColor(hue_, saturation_, normalized);
         HBRUSH brush = CreateSolidBrush(color);
         RECT row{valueRect.left, y, valueRect.right, y + 1};
-        FillRect(hdc, &row, brush);
+        FillRect(backDc, &row, brush);
         DeleteObject(brush);
     }
 
     const float angle = hue_ * std::numbers::pi_v<float> / 180.0f;
     const int selectorX = static_cast<int>(wheel.left + wheelWidth / 2.0f + std::cos(angle) * saturation_ * (wheelWidth / 2.0f - 1.0f));
     const int selectorY = static_cast<int>(wheel.top + wheelHeight / 2.0f + std::sin(angle) * saturation_ * (wheelHeight / 2.0f - 1.0f));
-    Ellipse(hdc, selectorX - 4, selectorY - 4, selectorX + 4, selectorY + 4);
+    Ellipse(backDc, selectorX - 4, selectorY - 4, selectorX + 4, selectorY + 4);
 
     const int valueY = valueRect.top + static_cast<int>((1.0f - value_) * static_cast<float>(valueRect.bottom - valueRect.top));
-    MoveToEx(hdc, valueRect.left - 2, valueY, nullptr);
-    LineTo(hdc, valueRect.right + 2, valueY);
+    MoveToEx(backDc, valueRect.left - 2, valueY, nullptr);
+    LineTo(backDc, valueRect.right + 2, valueY);
 
-    RECT swatch{wheel.left, wheel.bottom + 16, valueRect.right, wheel.bottom + 16 + 38};
+    RECT swatch{wheel.left, wheel.bottom + 16, valueRect.right, wheel.bottom + 16 + 46};
     HBRUSH swatchBrush = CreateSolidBrush(GetColor());
-    FillRect(hdc, &swatch, swatchBrush);
+    FillRect(backDc, &swatch, swatchBrush);
     DeleteObject(swatchBrush);
     HBRUSH frameBrush = CreateSolidBrush(kPickerBorder);
-    FrameRect(hdc, &swatch, frameBrush);
+    FrameRect(backDc, &swatch, frameBrush);
     DeleteObject(frameBrush);
+
+    BitBlt(hdc, 0, 0, width, height, backDc, 0, 0, SRCCOPY);
+    SelectObject(backDc, oldBitmap);
+    DeleteObject(backBitmap);
+    DeleteDC(backDc);
 
     EndPaint(hwnd_, &ps);
 }
@@ -183,7 +194,7 @@ void ColorPickerControl::UpdateFromPoint(POINT point) {
         value_ = 1.0f - std::clamp(static_cast<float>(point.y - valueRect.top) / static_cast<float>(std::max(1L, valueRect.bottom - valueRect.top)), 0.0f, 1.0f);
         draggingValue_ = true;
     }
-    InvalidateRect(hwnd_, nullptr, TRUE);
+    InvalidateRect(hwnd_, nullptr, FALSE);
     NotifyParent();
 }
 

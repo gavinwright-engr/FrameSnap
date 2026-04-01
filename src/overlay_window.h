@@ -7,7 +7,7 @@ class OverlayWindow {
 public:
     OverlayWindow(HINSTANCE instance, HWND owner);
 
-    bool BeginSession(const AppSettings& settings, std::chrono::steady_clock::time_point hotkeyStart);
+    bool BeginSession(const AppSettings& settings, std::chrono::steady_clock::time_point hotkeyStart, const std::shared_ptr<ImageData>& frozenFrame);
     void Cancel();
     bool IsActive() const;
 
@@ -39,4 +39,5 @@ private:
     RECT virtualBounds_{};
     RECT lastVisualBounds_{};
     bool hasLastVisualBounds_{false};
+    std::shared_ptr<ImageData> frozenFrame_;
 };

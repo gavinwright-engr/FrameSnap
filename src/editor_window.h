@@ -29,6 +29,7 @@ private:
     std::optional<FloatPoint> ClientToImage(POINT point) const;
     Gdiplus::RectF ImageToViewRect() const;
     void InvalidateCanvas(bool erase = false) const;
+    void InvalidateCanvasRect(const RECT& rect) const;
     void InvalidateSidebar() const;
     void RefreshButtons() const;
     void BeginStroke(FloatPoint point);
@@ -36,11 +37,18 @@ private:
     void ExtendStroke(FloatPoint point);
     void EndStroke();
     void EraseStrokeAt(FloatPoint point);
-    void EraseBrushAt(FloatPoint point);
     void PickColorAt(FloatPoint point);
     void UpdateToolbarState();
     void UpdateWidthsFromSlider();
     void SaveImage();
+    void ClearMarkupLayer();
+    void RebuildMarkupLayer();
+    void RasterizeStroke(ImageData& target, const Stroke& stroke) const;
+    float StrokeScaleFactor() const;
+    float EffectiveStrokeWidth(const Stroke& stroke) const;
+    RECT StrokeDirtyRect(const Stroke& stroke, size_t startIndex = 0) const;
+    bool CopyImageToClipboard(const ImageData& image) const;
+    void CopyToClipboardAndClose();
     ImageData RenderDocument() const;
 
     HINSTANCE instance_{};
@@ -68,4 +76,7 @@ private:
     HFONT uiFont_{};
     HFONT titleFont_{};
     HFONT hintFont_{};
+    HICON smallIcon_{};
+    HICON largeIcon_{};
+    ImageData markupImage_{};
 };

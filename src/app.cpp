@@ -383,12 +383,18 @@ void ScreenshotterApp::BeginCapture() {
             PlaySoundW(reinterpret_cast<LPCWSTR>(captureSound.data()), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT | SND_NOSTOP);
         }
     }
-    overlay_->BeginSession(settings_, hotkeyStart);
+    frozenFrame_ = captureEngine_.Capture(util::VirtualScreenBounds());
+    if (frozenFrame_ == nullptr) {
+        captureEngine_.RefreshOutputs();
+        frozenFrame_ = captureEngine_.Capture(util::VirtualScreenBounds());
+    }
+    overlay_->BeginSession(settings_, hotkeyStart, frozenFrame_);
     lastOverlayLatency_ = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - hotkeyStart);
 }
 
 void ScreenshotterApp::HandleCaptureReady(std::unique_ptr<CaptureRequest> request) {
-    auto result = captureEngine_.Capture(request->selection);
+    auto result = frozenFrame_ != nullptr ? util::CropImage(frozenFrame_, request->selection) : captureEngine_.Capture(request->selection);
+    frozenFrame_.reset();
     if (result == nullptr) {
         MessageBeep(MB_ICONERROR);
         return;

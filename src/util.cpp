@@ -112,6 +112,15 @@ std::filesystem::path DefaultSaveFolder() {
     return result;
 }
 
+RECT VirtualScreenBounds() {
+    return {
+        GetSystemMetrics(SM_XVIRTUALSCREEN),
+        GetSystemMetrics(SM_YVIRTUALSCREEN),
+        GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+        GetSystemMetrics(SM_YVIRTUALSCREEN) + GetSystemMetrics(SM_CYVIRTUALSCREEN),
+    };
+}
+
 RECT NormalizeRect(RECT rect) {
     if (rect.left > rect.right) {
         std::swap(rect.left, rect.right);
@@ -140,6 +149,74 @@ std::wstring ColorToHex(COLORREF color) {
     wchar_t buffer[16]{};
     swprintf_s(buffer, L"#%02X%02X%02X", GetRValue(color), GetGValue(color), GetBValue(color));
     return buffer;
+}
+
+std::shared_ptr<ImageData> CropImage(const std::shared_ptr<ImageData>& image, const RECT& selection) {
+    if (image == nullptr) {
+        return nullptr;
+    }
+    const RECT normalized = NormalizeRect(selection);
+    const RECT clipped = IntersectRectSafe(normalized, image->sourceRect);
+    if (IsRectEmptySafe(clipped)) {
+        return nullptr;
+    }
+
+    auto cropped = std::make_shared<ImageData>();
+    cropped->width = clipped.right - clipped.left;
+    cropped->height = clipped.bottom - clipped.top;
+    cropped->hdrSource = image->hdrSource;
+    cropped->sourceRect = clipped;
+    cropped->pixels.resize(static_cast<std::size_t>(cropped->width) * static_cast<std::size_t>(cropped->height) * 4U);
+
+    const LONG srcOffsetX = clipped.left - image->sourceRect.left;
+    const LONG srcOffsetY = clipped.top - image->sourceRect.top;
+    for (LONG y = 0; y < cropped->height; ++y) {
+        const auto* srcRow = image->pixels.data() +
+            (static_cast<std::size_t>(srcOffsetY + y) * static_cast<std::size_t>(image->width) + static_cast<std::size_t>(srcOffsetX)) * 4U;
+        auto* dstRow = cropped->pixels.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(cropped->width) * 4U;
+        memcpy(dstRow, srcRow, static_cast<std::size_t>(cropped->width) * 4U);
+    }
+    return cropped;
+}
+
+HICON CreateOneShotAppIcon(int size) {
+    const int extent = std::max(16, size);
+    Gdiplus::Bitmap bitmap(extent, extent, PixelFormat32bppARGB);
+    Gdiplus::Graphics graphics(&bitmap);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.Clear(Gdiplus::Color(0, 0, 0, 0));
+
+    Gdiplus::SolidBrush outerBrush(Gdiplus::Color(255, 15, 23, 42));
+    Gdiplus::SolidBrush centerBrush(Gdiplus::Color(255, 29, 78, 216));
+    Gdiplus::Pen ringPen(Gdiplus::Color(255, 148, 163, 184), std::max(1.0f, extent / 24.0f));
+    Gdiplus::Pen reticlePen(Gdiplus::Color(255, 255, 255, 255), std::max(1.8f, extent / 18.0f));
+    reticlePen.SetStartCap(Gdiplus::LineCapRound);
+    reticlePen.SetEndCap(Gdiplus::LineCapRound);
+
+    const auto outerRect = Gdiplus::RectF(2.0f, 2.0f, static_cast<Gdiplus::REAL>(extent - 4), static_cast<Gdiplus::REAL>(extent - 4));
+    graphics.FillEllipse(&outerBrush, outerRect);
+    graphics.DrawEllipse(&ringPen, outerRect);
+
+    const float centerX = extent / 2.0f;
+    const float centerY = extent / 2.0f;
+    const float innerRadius = extent / 5.2f;
+    graphics.FillEllipse(&centerBrush, centerX - innerRadius, centerY - innerRadius, innerRadius * 2.0f, innerRadius * 2.0f);
+    graphics.DrawLine(&reticlePen, centerX, 6.0f, centerX, centerY - innerRadius - 2.0f);
+    graphics.DrawLine(&reticlePen, centerX, centerY + innerRadius + 2.0f, centerX, static_cast<float>(extent - 6));
+    graphics.DrawLine(&reticlePen, 6.0f, centerY, centerX - innerRadius - 2.0f, centerY);
+    graphics.DrawLine(&reticlePen, centerX + innerRadius + 2.0f, centerY, static_cast<float>(extent - 6), centerY);
+
+    HBITMAP colorBitmap = nullptr;
+    bitmap.GetHBITMAP(Gdiplus::Color(0, 0, 0, 0), &colorBitmap);
+    HBITMAP maskBitmap = CreateBitmap(extent, extent, 1, 1, nullptr);
+    ICONINFO iconInfo{};
+    iconInfo.fIcon = TRUE;
+    iconInfo.hbmColor = colorBitmap;
+    iconInfo.hbmMask = maskBitmap;
+    HICON icon = CreateIconIndirect(&iconInfo);
+    DeleteObject(colorBitmap);
+    DeleteObject(maskBitmap);
+    return icon;
 }
 
 void WriteMetricsLog(const CaptureMetrics& metrics, const ImageData& image) {

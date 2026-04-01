@@ -7,15 +7,6 @@ namespace {
 constexpr wchar_t kOverlayClassName[] = L"ScreenshotterOverlayWindow";
 constexpr BYTE kOverlayAlpha = 175;
 
-RECT VirtualScreenBounds() {
-    return {
-        GetSystemMetrics(SM_XVIRTUALSCREEN),
-        GetSystemMetrics(SM_YVIRTUALSCREEN),
-        GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN),
-        GetSystemMetrics(SM_YVIRTUALSCREEN) + GetSystemMetrics(SM_CYVIRTUALSCREEN),
-    };
-}
-
 RECT UnionRectSafe(const RECT& a, const RECT& b) {
     if (util::IsRectEmptySafe(a)) {
         return b;
@@ -97,7 +88,7 @@ bool OverlayWindow::EnsureWindow() {
         captureCursor_ = CreateCaptureCursor();
     }
 
-    virtualBounds_ = VirtualScreenBounds();
+    virtualBounds_ = util::VirtualScreenBounds();
     hwnd_ = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
         kOverlayClassName,
@@ -119,9 +110,10 @@ bool OverlayWindow::EnsureWindow() {
     return true;
 }
 
-bool OverlayWindow::BeginSession(const AppSettings& settings, std::chrono::steady_clock::time_point hotkeyStart) {
+bool OverlayWindow::BeginSession(const AppSettings& settings, std::chrono::steady_clock::time_point hotkeyStart, const std::shared_ptr<ImageData>& frozenFrame) {
     settings_ = settings;
     hotkeyStart_ = hotkeyStart;
+    frozenFrame_ = frozenFrame;
     active_ = false;
     mouseDown_ = false;
     dragging_ = false;
@@ -136,8 +128,8 @@ bool OverlayWindow::BeginSession(const AppSettings& settings, std::chrono::stead
         return false;
     }
 
-    virtualBounds_ = VirtualScreenBounds();
-    SetLayeredWindowAttributes(hwnd_, 0, 0, LWA_ALPHA);
+    virtualBounds_ = util::VirtualScreenBounds();
+    SetLayeredWindowAttributes(hwnd_, 0, frozenFrame_ != nullptr ? 255 : 0, LWA_ALPHA);
     SetWindowPos(hwnd_,
         HWND_TOPMOST,
         virtualBounds_.left,
@@ -154,7 +146,7 @@ bool OverlayWindow::BeginSession(const AppSettings& settings, std::chrono::stead
     active_ = true;
     InvalidateRect(hwnd_, nullptr, TRUE);
     RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
-    SetLayeredWindowAttributes(hwnd_, 0, kOverlayAlpha, LWA_ALPHA);
+    SetLayeredWindowAttributes(hwnd_, 0, frozenFrame_ != nullptr ? 255 : kOverlayAlpha, LWA_ALPHA);
     return true;
 }
 
@@ -172,6 +164,7 @@ void OverlayWindow::Cancel() {
     dragCurrent_ = {};
     anchorPoint_ = {};
     hasLastVisualBounds_ = false;
+    frozenFrame_.reset();
 }
 
 bool OverlayWindow::IsActive() const {
@@ -273,9 +266,37 @@ void OverlayWindow::Paint() {
     HGDIOBJ oldBitmap = SelectObject(backDc, backBitmap);
 
     RECT paintLocal{0, 0, paintWidth, paintHeight};
-    HBRUSH background = CreateSolidBrush(RGB(0, 0, 0));
-    FillRect(backDc, &paintLocal, background);
-    DeleteObject(background);
+    if (frozenFrame_ != nullptr && frozenFrame_->width > 0 && frozenFrame_->height > 0 && !frozenFrame_->pixels.empty()) {
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = frozenFrame_->width;
+        info.bmiHeader.biHeight = -frozenFrame_->height;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        StretchDIBits(
+            backDc,
+            0,
+            0,
+            frozenFrame_->width,
+            frozenFrame_->height,
+            0,
+            0,
+            frozenFrame_->width,
+            frozenFrame_->height,
+            frozenFrame_->pixels.data(),
+            &info,
+            DIB_RGB_COLORS,
+            SRCCOPY);
+        Gdiplus::Graphics graphics(backDc);
+        Gdiplus::SolidBrush dimBrush(Gdiplus::Color(112, 0, 0, 0));
+        graphics.FillRectangle(&dimBrush, 0.0f, 0.0f, static_cast<Gdiplus::REAL>(virtualBounds_.right - virtualBounds_.left),
+            static_cast<Gdiplus::REAL>(virtualBounds_.bottom - virtualBounds_.top));
+    } else {
+        HBRUSH background = CreateSolidBrush(RGB(0, 0, 0));
+        FillRect(backDc, &paintLocal, background);
+        DeleteObject(background);
+    }
     SetViewportOrgEx(backDc, -ps.rcPaint.left, -ps.rcPaint.top, nullptr);
 
     const RECT selection = CurrentSelectionRect();
@@ -286,6 +307,29 @@ void OverlayWindow::Paint() {
             selection.right - virtualBounds_.left,
             selection.bottom - virtualBounds_.top,
         };
+        if (frozenFrame_ != nullptr && frozenFrame_->width > 0 && frozenFrame_->height > 0 && !frozenFrame_->pixels.empty()) {
+            BITMAPINFO info{};
+            info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            info.bmiHeader.biWidth = frozenFrame_->width;
+            info.bmiHeader.biHeight = -frozenFrame_->height;
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB;
+            StretchDIBits(
+                backDc,
+                localSelection.left,
+                localSelection.top,
+                localSelection.right - localSelection.left,
+                localSelection.bottom - localSelection.top,
+                localSelection.left,
+                localSelection.top,
+                localSelection.right - localSelection.left,
+                localSelection.bottom - localSelection.top,
+                frozenFrame_->pixels.data(),
+                &info,
+                DIB_RGB_COLORS,
+                SRCCOPY);
+        }
         HPEN pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
         HGDIOBJ oldPen = SelectObject(backDc, pen);
         HGDIOBJ oldBrush = SelectObject(backDc, GetStockObject(HOLLOW_BRUSH));
