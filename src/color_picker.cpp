@@ -3,6 +3,10 @@
 namespace {
 
 constexpr wchar_t kColorPickerClassName[] = L"ScreenshotterColorPicker";
+constexpr int kWheelMargin = 10;
+constexpr int kBottomPreviewHeight = 56;
+constexpr COLORREF kPickerBackground = RGB(255, 255, 255);
+constexpr COLORREF kPickerBorder = RGB(214, 223, 234);
 
 }  // namespace
 
@@ -58,13 +62,13 @@ COLORREF ColorPickerControl::GetColor() const {
 RECT ColorPickerControl::WheelRect() const {
     RECT client{};
     GetClientRect(hwnd_, &client);
-    const int diameter = std::min(client.bottom - client.top - 12, client.right - client.left - 40);
-    return {6, 6, 6 + diameter, 6 + diameter};
+    const int diameter = std::min(client.bottom - client.top - kBottomPreviewHeight - kWheelMargin * 2, client.right - client.left - 44);
+    return {kWheelMargin, kWheelMargin, kWheelMargin + diameter, kWheelMargin + diameter};
 }
 
 RECT ColorPickerControl::ValueRect() const {
     const RECT wheel = WheelRect();
-    return {wheel.right + 8, wheel.top, wheel.right + 24, wheel.bottom};
+    return {wheel.right + 10, wheel.top, wheel.right + 28, wheel.bottom};
 }
 
 void ColorPickerControl::Paint() {
@@ -72,7 +76,17 @@ void ColorPickerControl::Paint() {
     HDC hdc = BeginPaint(hwnd_, &ps);
     RECT client{};
     GetClientRect(hwnd_, &client);
-    FillRect(hdc, &client, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+    HBRUSH backgroundBrush = CreateSolidBrush(kPickerBackground);
+    FillRect(hdc, &client, backgroundBrush);
+    DeleteObject(backgroundBrush);
+
+    HPEN borderPen = CreatePen(PS_SOLID, 1, kPickerBorder);
+    HGDIOBJ oldPen = SelectObject(hdc, borderPen);
+    HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
+    RoundRect(hdc, client.left, client.top, client.right, client.bottom, 18, 18);
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(borderPen);
 
     const RECT wheel = WheelRect();
     const int wheelWidth = wheel.right - wheel.left;
@@ -133,11 +147,13 @@ void ColorPickerControl::Paint() {
     MoveToEx(hdc, valueRect.left - 2, valueY, nullptr);
     LineTo(hdc, valueRect.right + 2, valueY);
 
-    RECT swatch{valueRect.left, valueRect.bottom + 8, valueRect.right, valueRect.bottom + 28};
+    RECT swatch{wheel.left, wheel.bottom + 16, valueRect.right, wheel.bottom + 16 + 38};
     HBRUSH swatchBrush = CreateSolidBrush(GetColor());
     FillRect(hdc, &swatch, swatchBrush);
     DeleteObject(swatchBrush);
-    FrameRect(hdc, &swatch, reinterpret_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
+    HBRUSH frameBrush = CreateSolidBrush(kPickerBorder);
+    FrameRect(hdc, &swatch, frameBrush);
+    DeleteObject(frameBrush);
 
     EndPaint(hwnd_, &ps);
 }
@@ -267,6 +283,8 @@ LRESULT ColorPickerControl::HandleMessage(UINT message, WPARAM wParam, LPARAM lP
     case WM_PAINT:
         Paint();
         return 0;
+    case WM_ERASEBKGND:
+        return 1;
     default:
         break;
     }

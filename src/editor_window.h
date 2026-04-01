@@ -32,9 +32,11 @@ private:
     void InvalidateSidebar() const;
     void RefreshButtons() const;
     void BeginStroke(FloatPoint point);
+    void BreakStroke();
     void ExtendStroke(FloatPoint point);
     void EndStroke();
     void EraseStrokeAt(FloatPoint point);
+    void EraseBrushAt(FloatPoint point);
     void PickColorAt(FloatPoint point);
     void UpdateToolbarState();
     void UpdateWidthsFromSlider();
@@ -47,6 +49,7 @@ private:
     HWND penButton_{};
     HWND highlighterButton_{};
     HWND eraseButton_{};
+    HWND eraseBrushButton_{};
     HWND eyedropperButton_{};
     HWND undoButton_{};
     HWND redoButton_{};

@@ -5,7 +5,7 @@
 namespace {
 
 constexpr wchar_t kEditorClassName[] = L"OneShotEditorWindow";
-constexpr int kToolbarHeight = 104;
+constexpr int kToolbarHeight = 88;
 constexpr int kSidebarWidth = 292;
 constexpr int kOuterPadding = 18;
 constexpr int kButtonHeight = 46;
@@ -13,7 +13,9 @@ constexpr int kButtonGap = 10;
 constexpr COLORREF kWindowColor = RGB(238, 242, 247);
 constexpr COLORREF kToolbarColor = RGB(248, 250, 253);
 constexpr COLORREF kSidebarColor = RGB(246, 249, 252);
-constexpr COLORREF kCanvasColor = RGB(27, 31, 40);
+constexpr COLORREF kCanvasColor = RGB(228, 233, 240);
+constexpr COLORREF kCanvasStripeColor = RGB(220, 226, 235);
+constexpr COLORREF kCanvasFrameColor = RGB(205, 214, 226);
 constexpr COLORREF kCardColor = RGB(255, 255, 255);
 constexpr COLORREF kAccentColor = RGB(29, 78, 216);
 constexpr COLORREF kAccentPressedColor = RGB(21, 66, 190);
@@ -21,11 +23,13 @@ constexpr COLORREF kBorderColor = RGB(214, 223, 234);
 constexpr COLORREF kTitleColor = RGB(15, 23, 42);
 constexpr COLORREF kBodyColor = RGB(71, 85, 105);
 constexpr COLORREF kMutedColor = RGB(100, 116, 139);
+constexpr FloatPoint kStrokeBreakPoint{-1.0f, -1.0f};
 
 enum ControlId {
     ControlPen = 2001,
     ControlHighlighter,
     ControlErase,
+    ControlEraseBrush,
     ControlEyedropper,
     ControlUndo,
     ControlRedo,
@@ -58,6 +62,10 @@ Gdiplus::Color ToGdiColor(COLORREF color, BYTE alpha = 255) {
     return Gdiplus::Color(alpha, GetRValue(color), GetGValue(color), GetBValue(color));
 }
 
+bool IsStrokeBreakPoint(const FloatPoint& point) {
+    return point.x < 0.0f || point.y < 0.0f;
+}
+
 float DistanceToSegment(FloatPoint point, FloatPoint a, FloatPoint b) {
     const float dx = b.x - a.x;
     const float dy = b.y - a.y;
@@ -75,35 +83,12 @@ float DistanceToSegment(FloatPoint point, FloatPoint a, FloatPoint b) {
     return std::sqrt(ex * ex + ey * ey);
 }
 
-std::vector<Gdiplus::PointF> ProjectStrokeToView(const Stroke& stroke, const Gdiplus::RectF& imageRect, const SIZE& imageSize) {
-    std::vector<Gdiplus::PointF> points;
-    if (imageSize.cx <= 0 || imageSize.cy <= 0) {
-        return points;
-    }
-    points.reserve(stroke.points.size());
-    for (const auto& point : stroke.points) {
-        const float x = imageRect.X + (point.x / static_cast<float>(imageSize.cx)) * imageRect.Width;
-        const float y = imageRect.Y + (point.y / static_cast<float>(imageSize.cy)) * imageRect.Height;
-        points.emplace_back(x, y);
-    }
-    return points;
-}
-
-std::vector<Gdiplus::PointF> ProjectStrokeNative(const Stroke& stroke) {
-    std::vector<Gdiplus::PointF> points;
-    points.reserve(stroke.points.size());
-    for (const auto& point : stroke.points) {
-        points.emplace_back(point.x, point.y);
-    }
-    return points;
-}
-
 void DrawStrokeGeometry(Gdiplus::Graphics& graphics, std::span<const Gdiplus::PointF> points, const Stroke& stroke, float width) {
     if (points.empty()) {
         return;
     }
 
-    const BYTE alpha = stroke.tool == ActiveTool::Highlighter ? 104 : 255;
+    const BYTE alpha = stroke.tool == ActiveTool::Highlighter ? 104 : stroke.tool == ActiveTool::EraseBrush ? 220 : 255;
     if (points.size() == 1) {
         Gdiplus::SolidBrush brush(ToGdiColor(stroke.color, alpha));
         const float radius = std::max(1.0f, width * 0.5f);
@@ -126,20 +111,60 @@ void DrawStrokeGeometry(Gdiplus::Graphics& graphics, std::span<const Gdiplus::Po
 }
 
 void DrawStrokeOnView(Gdiplus::Graphics& graphics, const Stroke& stroke, const Gdiplus::RectF& imageRect, const SIZE& imageSize) {
-    const auto points = ProjectStrokeToView(stroke, imageRect, imageSize);
-    if (points.empty()) {
+    if (imageSize.cx <= 0 || imageSize.cy <= 0) {
         return;
     }
     const float scale = imageRect.Width / static_cast<float>(std::max<LONG>(1, imageSize.cx));
-    DrawStrokeGeometry(graphics, points, stroke, std::max(1.0f, stroke.width * scale));
+    std::vector<Gdiplus::PointF> segment;
+    segment.reserve(stroke.points.size());
+    const auto flush = [&]() {
+        if (segment.empty()) {
+            return;
+        }
+        DrawStrokeGeometry(graphics, segment, stroke, std::max(1.0f, stroke.width * scale));
+        segment.clear();
+    };
+
+    for (const auto& point : stroke.points) {
+        if (IsStrokeBreakPoint(point)) {
+            flush();
+            continue;
+        }
+        const float x = imageRect.X + (point.x / static_cast<float>(imageSize.cx)) * imageRect.Width;
+        const float y = imageRect.Y + (point.y / static_cast<float>(imageSize.cy)) * imageRect.Height;
+        segment.emplace_back(x, y);
+    }
+    flush();
 }
 
 void DrawStrokeNative(Gdiplus::Graphics& graphics, const Stroke& stroke) {
-    const auto points = ProjectStrokeNative(stroke);
-    if (points.empty()) {
-        return;
+    std::vector<Gdiplus::PointF> segment;
+    segment.reserve(stroke.points.size());
+    const auto flush = [&]() {
+        if (segment.empty()) {
+            return;
+        }
+        DrawStrokeGeometry(graphics, segment, stroke, std::max(1.0f, stroke.width));
+        segment.clear();
+    };
+
+    for (const auto& point : stroke.points) {
+        if (IsStrokeBreakPoint(point)) {
+            flush();
+            continue;
+        }
+        segment.emplace_back(point.x, point.y);
     }
-    DrawStrokeGeometry(graphics, points, stroke, std::max(1.0f, stroke.width));
+    flush();
+}
+
+bool StrokeHasContent(const Stroke& stroke) {
+    for (const auto& point : stroke.points) {
+        if (!IsStrokeBreakPoint(point)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace
@@ -198,10 +223,6 @@ HFONT EditorWindow::CreateUiFont(int height, int weight) const {
 void EditorWindow::ApplyWindowChrome() const {
     DWM_WINDOW_CORNER_PREFERENCE cornerPreference = DWMWCP_ROUND;
     DwmSetWindowAttribute(hwnd_, DWMWA_WINDOW_CORNER_PREFERENCE, &cornerPreference, sizeof(cornerPreference));
-#ifdef DWMWA_SYSTEMBACKDROP_TYPE
-    DWM_SYSTEMBACKDROP_TYPE backdrop = DWMSBT_MAINWINDOW;
-    DwmSetWindowAttribute(hwnd_, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
-#endif
 }
 
 bool EditorWindow::EnsureWindow() {
@@ -222,10 +243,10 @@ bool EditorWindow::EnsureWindow() {
     hintFont_ = CreateUiFont(15, FW_NORMAL);
 
     hwnd_ = CreateWindowExW(
-        WS_EX_APPWINDOW,
+        0,
         kEditorClassName,
         L"OneShot Editor",
-        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME | WS_CLIPCHILDREN,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         1280,
@@ -246,6 +267,8 @@ bool EditorWindow::EnsureWindow() {
         reinterpret_cast<HMENU>(ControlHighlighter), instance_, nullptr);
     eraseButton_ = CreateWindowW(L"BUTTON", L"Erase Line", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 0, 0, hwnd_,
         reinterpret_cast<HMENU>(ControlErase), instance_, nullptr);
+    eraseBrushButton_ = CreateWindowW(L"BUTTON", L"Erase Pen", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 0, 0, hwnd_,
+        reinterpret_cast<HMENU>(ControlEraseBrush), instance_, nullptr);
     eyedropperButton_ = CreateWindowW(L"BUTTON", L"Eyedropper", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 0, 0, hwnd_,
         reinterpret_cast<HMENU>(ControlEyedropper), instance_, nullptr);
     undoButton_ = CreateWindowW(L"BUTTON", L"Undo", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 0, 0, hwnd_,
@@ -261,10 +284,11 @@ bool EditorWindow::EnsureWindow() {
     SendMessageW(widthSlider_, TBM_SETPAGESIZE, 0, 4);
 
     colorPicker_ = std::make_unique<ColorPickerControl>(instance_, hwnd_, ControlColor);
-    colorPicker_->Create(0, 0, 220, 260);
+    colorPicker_->Create(0, 0, 220, 310);
 
     ApplyFonts();
     LayoutControls();
+    SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
     return true;
 }
 
@@ -273,16 +297,19 @@ void EditorWindow::ApplyFonts() const {
         penButton_,
         highlighterButton_,
         eraseButton_,
+        eraseBrushButton_,
         eyedropperButton_,
         undoButton_,
         redoButton_,
         saveButton_,
-        widthSlider_,
     };
     for (const HWND control : controls) {
         if (control != nullptr) {
             SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), TRUE);
         }
+    }
+    if (widthSlider_ != nullptr) {
+        SendMessageW(widthSlider_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), TRUE);
     }
 }
 
@@ -317,15 +344,17 @@ void EditorWindow::LayoutControls() {
     const int contentRight = sidebar.left - kOuterPadding;
 
     int x = kOuterPadding;
-    const int buttonTop = 36;
-    MoveWindow(penButton_, x, buttonTop, 112, kButtonHeight, TRUE);
-    x += 112 + kButtonGap;
-    MoveWindow(highlighterButton_, x, buttonTop, 150, kButtonHeight, TRUE);
-    x += 150 + kButtonGap;
-    MoveWindow(eraseButton_, x, buttonTop, 132, kButtonHeight, TRUE);
+    const int buttonTop = 18;
+    MoveWindow(penButton_, x, buttonTop, 100, kButtonHeight, TRUE);
+    x += 100 + kButtonGap;
+    MoveWindow(highlighterButton_, x, buttonTop, 132, kButtonHeight, TRUE);
     x += 132 + kButtonGap;
-    MoveWindow(eyedropperButton_, x, buttonTop, 136, kButtonHeight, TRUE);
-    x += 136 + kButtonGap;
+    MoveWindow(eraseButton_, x, buttonTop, 122, kButtonHeight, TRUE);
+    x += 122 + kButtonGap;
+    MoveWindow(eraseBrushButton_, x, buttonTop, 120, kButtonHeight, TRUE);
+    x += 120 + kButtonGap;
+    MoveWindow(eyedropperButton_, x, buttonTop, 122, kButtonHeight, TRUE);
+    x += 122 + kButtonGap;
 
     const int saveWidth = 122;
     const int actionWidth = 82;
@@ -335,12 +364,12 @@ void EditorWindow::LayoutControls() {
     const int sliderX = x;
     const int sliderWidth = std::max(160, undoX - sliderX - kButtonGap);
 
-    MoveWindow(widthSlider_, sliderX, buttonTop + 4, sliderWidth, 34, TRUE);
+    MoveWindow(widthSlider_, sliderX, buttonTop + 7, sliderWidth, 28, TRUE);
     MoveWindow(undoButton_, undoX, buttonTop, actionWidth, kButtonHeight, TRUE);
     MoveWindow(redoButton_, redoX, buttonTop, actionWidth, kButtonHeight, TRUE);
     MoveWindow(saveButton_, saveX, buttonTop, saveWidth, kButtonHeight, TRUE);
 
-    colorPicker_->Move(sidebar.left + 18, kToolbarHeight + 70, sidebar.right - sidebar.left - 36, 254);
+    colorPicker_->Move(sidebar.left + 18, kToolbarHeight + 18, sidebar.right - sidebar.left - 36, 320);
     RefreshButtons();
 }
 
@@ -427,10 +456,11 @@ void EditorWindow::InvalidateSidebar() const {
 }
 
 void EditorWindow::RefreshButtons() const {
-    const std::array<HWND, 7> buttons{
+    const std::array<HWND, 8> buttons{
         penButton_,
         highlighterButton_,
         eraseButton_,
+        eraseBrushButton_,
         eyedropperButton_,
         undoButton_,
         redoButton_,
@@ -455,12 +485,26 @@ void EditorWindow::BeginStroke(FloatPoint point) {
     inFlightStroke_.points.push_back(point);
 }
 
+void EditorWindow::BreakStroke() {
+    if (!drawing_) {
+        return;
+    }
+    if (inFlightStroke_.points.empty() || IsStrokeBreakPoint(inFlightStroke_.points.back())) {
+        return;
+    }
+    inFlightStroke_.points.push_back(kStrokeBreakPoint);
+}
+
 void EditorWindow::ExtendStroke(FloatPoint point) {
     if (!drawing_) {
         return;
     }
     if (!inFlightStroke_.points.empty()) {
         const auto& last = inFlightStroke_.points.back();
+        if (IsStrokeBreakPoint(last)) {
+            inFlightStroke_.points.push_back(point);
+            return;
+        }
         const float dx = point.x - last.x;
         const float dy = point.y - last.y;
         if ((dx * dx + dy * dy) < 0.12f) {
@@ -476,7 +520,10 @@ void EditorWindow::EndStroke() {
     }
 
     drawing_ = false;
-    if (inFlightStroke_.points.size() >= 2) {
+    while (!inFlightStroke_.points.empty() && IsStrokeBreakPoint(inFlightStroke_.points.back())) {
+        inFlightStroke_.points.pop_back();
+    }
+    if (StrokeHasContent(inFlightStroke_)) {
         strokes_.push_back(inFlightStroke_);
         redoStrokes_.clear();
     }
@@ -489,6 +536,9 @@ void EditorWindow::EraseStrokeAt(FloatPoint point) {
     for (auto it = strokes_.rbegin(); it != strokes_.rend(); ++it) {
         const float tolerance = std::max(6.0f, it->width * 1.15f);
         for (size_t i = 1; i < it->points.size(); ++i) {
+            if (IsStrokeBreakPoint(it->points[i - 1]) || IsStrokeBreakPoint(it->points[i])) {
+                continue;
+            }
             if (DistanceToSegment(point, it->points[i - 1], it->points[i]) <= tolerance) {
                 strokes_.erase(std::next(it).base());
                 redoStrokes_.clear();
@@ -497,6 +547,59 @@ void EditorWindow::EraseStrokeAt(FloatPoint point) {
                 return;
             }
         }
+    }
+}
+
+void EditorWindow::EraseBrushAt(FloatPoint point) {
+    bool changed = false;
+    constexpr float minimumRadius = 6.0f;
+    const float radius = std::max(minimumRadius, settings_ != nullptr ? settings_->penWidth * 1.35f : minimumRadius);
+
+    for (auto strokeIt = strokes_.begin(); strokeIt != strokes_.end();) {
+        bool strokeChanged = false;
+        std::vector<FloatPoint> rebuilt;
+        rebuilt.reserve(strokeIt->points.size());
+
+        auto flushBreak = [&]() {
+            if (!rebuilt.empty() && !IsStrokeBreakPoint(rebuilt.back())) {
+                rebuilt.push_back(kStrokeBreakPoint);
+            }
+        };
+
+        for (const auto& pointValue : strokeIt->points) {
+            if (IsStrokeBreakPoint(pointValue)) {
+                flushBreak();
+                continue;
+            }
+            const float dx = pointValue.x - point.x;
+            const float dy = pointValue.y - point.y;
+            if ((dx * dx + dy * dy) <= radius * radius) {
+                flushBreak();
+                strokeChanged = true;
+                continue;
+            }
+            rebuilt.push_back(pointValue);
+        }
+
+        while (!rebuilt.empty() && IsStrokeBreakPoint(rebuilt.back())) {
+            rebuilt.pop_back();
+        }
+
+        if (strokeChanged) {
+            strokeIt->points = std::move(rebuilt);
+            changed = true;
+            if (!StrokeHasContent(*strokeIt)) {
+                strokeIt = strokes_.erase(strokeIt);
+                continue;
+            }
+        }
+        ++strokeIt;
+    }
+
+    if (changed) {
+        redoStrokes_.clear();
+        UpdateToolbarState();
+        InvalidateCanvas(false);
     }
 }
 
@@ -532,7 +635,7 @@ void EditorWindow::UpdateToolbarState() {
     const int value = widthTool == ActiveTool::Highlighter ? static_cast<int>(std::round(settings_->highlighterWidth))
                                                            : static_cast<int>(std::round(settings_->penWidth));
     SendMessageW(widthSlider_, TBM_SETPOS, TRUE, value);
-    EnableWindow(widthSlider_, activeTool_ != ActiveTool::Erase);
+    EnableWindow(widthSlider_, activeTool_ != ActiveTool::EraseLine && activeTool_ != ActiveTool::Eyedropper);
     EnableWindow(redoButton_, !redoStrokes_.empty());
     EnableWindow(undoButton_, !strokes_.empty());
     RefreshButtons();
@@ -590,7 +693,8 @@ void EditorWindow::SaveImage() {
 }
 
 bool EditorWindow::IsToolButton(UINT controlId) const {
-    return controlId == ControlPen || controlId == ControlHighlighter || controlId == ControlErase || controlId == ControlEyedropper;
+    return controlId == ControlPen || controlId == ControlHighlighter || controlId == ControlErase ||
+           controlId == ControlEraseBrush || controlId == ControlEyedropper;
 }
 
 void EditorWindow::PaintButton(const DRAWITEMSTRUCT& drawItem) const {
@@ -603,7 +707,9 @@ void EditorWindow::PaintButton(const DRAWITEMSTRUCT& drawItem) const {
     } else if (controlId == ControlHighlighter) {
         active = activeTool_ == ActiveTool::Highlighter;
     } else if (controlId == ControlErase) {
-        active = activeTool_ == ActiveTool::Erase;
+        active = activeTool_ == ActiveTool::EraseLine;
+    } else if (controlId == ControlEraseBrush) {
+        active = activeTool_ == ActiveTool::EraseBrush;
     } else if (controlId == ControlEyedropper) {
         active = activeTool_ == ActiveTool::Eyedropper;
     }
@@ -689,7 +795,15 @@ void EditorWindow::Paint() {
         static_cast<Gdiplus::REAL>(canvas.right - canvas.left),
         static_cast<Gdiplus::REAL>(canvas.bottom - canvas.top));
 
-    Gdiplus::Pen canvasBorder(ToGdiColor(RGB(42, 48, 60)), 1.0f);
+    for (LONG y = canvas.top; y < canvas.bottom; y += 18) {
+        const bool offset = ((y - canvas.top) / 18) % 2 == 0;
+        RECT stripe{canvas.left + (offset ? 0 : 9), y, canvas.right, std::min<LONG>(canvas.bottom, y + 9)};
+        HBRUSH stripeBrush = CreateSolidBrush(kCanvasStripeColor);
+        FillRect(backDc, &stripe, stripeBrush);
+        DeleteObject(stripeBrush);
+    }
+
+    Gdiplus::Pen canvasBorder(ToGdiColor(kCanvasFrameColor), 1.0f);
     graphics.DrawRectangle(&canvasBorder,
         static_cast<Gdiplus::REAL>(canvas.left),
         static_cast<Gdiplus::REAL>(canvas.top),
@@ -699,7 +813,11 @@ void EditorWindow::Paint() {
     if (image_ != nullptr) {
         Gdiplus::Bitmap bitmap(image_->width, image_->height, image_->width * 4, PixelFormat32bppARGB, const_cast<BYTE*>(image_->pixels.data()));
         const auto imageRect = ImageToViewRect();
+        Gdiplus::SolidBrush shadowBrush(Gdiplus::Color(36, 15, 23, 42));
+        graphics.FillRectangle(&shadowBrush, imageRect.X + 8.0f, imageRect.Y + 10.0f, imageRect.Width, imageRect.Height);
         graphics.DrawImage(&bitmap, imageRect);
+        Gdiplus::Pen imageBorder(ToGdiColor(RGB(203, 213, 225)), 1.0f);
+        graphics.DrawRectangle(&imageBorder, imageRect);
 
         const SIZE imageSize{image_->width, image_->height};
         for (const auto& stroke : strokes_) {
@@ -710,23 +828,15 @@ void EditorWindow::Paint() {
         }
     }
 
-    SetBkMode(backDc, TRANSPARENT);
-    SelectObject(backDc, titleFont_);
-    SetTextColor(backDc, kTitleColor);
-    RECT titleRect = RectWithSize(kOuterPadding, 14, 320, 26);
-    DrawTextW(backDc, L"OneShot Editor", -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    SelectObject(backDc, hintFont_);
-    SetTextColor(backDc, kBodyColor);
-    RECT subtitleRect = RectWithSize(kOuterPadding, 44, 420, 18);
-    DrawTextW(backDc, L"Freehand markup with line erase and a low-impact repaint path.", -1, &subtitleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    RECT widthLabelRect = RectWithSize(430, 22, 160, 18);
-    DrawTextW(backDc, L"Stroke width", -1, &widthLabelRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
     SelectObject(backDc, uiFont_);
+    SetBkMode(backDc, TRANSPARENT);
     SetTextColor(backDc, kMutedColor);
-    RECT widthValueRect = RectWithSize(430, 58, 140, 18);
+    RECT sliderRect{};
+    if (widthSlider_ != nullptr) {
+        GetWindowRect(widthSlider_, &sliderRect);
+        MapWindowPoints(HWND_DESKTOP, hwnd_, reinterpret_cast<LPPOINT>(&sliderRect), 2);
+    }
+    RECT widthValueRect = RectWithSize(sliderRect.left, 56, 140, 18);
     if (settings_ != nullptr) {
         ActiveTool widthTool = activeTool_;
         if (widthTool != ActiveTool::Pen && widthTool != ActiveTool::Highlighter) {
@@ -737,7 +847,7 @@ void EditorWindow::Paint() {
         DrawTextW(backDc, widthLabel.c_str(), -1, &widthValueRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     }
 
-    const RECT infoCard = RectWithSize(sidebar.left + 16, kToolbarHeight + 16, sidebar.right - sidebar.left - 32, 330);
+    const RECT infoCard = RectWithSize(sidebar.left + 16, kToolbarHeight + 350, sidebar.right - sidebar.left - 32, 188);
     HBRUSH cardBrush = CreateSolidBrush(kCardColor);
     HPEN cardPen = CreatePen(PS_SOLID, 1, kBorderColor);
     HGDIOBJ oldBrush = SelectObject(backDc, cardBrush);
@@ -750,34 +860,46 @@ void EditorWindow::Paint() {
 
     SelectObject(backDc, uiFont_);
     SetTextColor(backDc, kTitleColor);
-    RECT panelTitleRect = RectWithSize(infoCard.left + 16, infoCard.top + 14, 180, 18);
-    DrawTextW(backDc, L"Markup", -1, &panelTitleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    SelectObject(backDc, hintFont_);
-    SetTextColor(backDc, kBodyColor);
-    RECT panelHintRect = RectWithSize(infoCard.left + 16, infoCard.top + 38, infoCard.right - infoCard.left - 32, 28);
-    DrawTextW(backDc, L"Pick a color, draw freehand, or remove an entire stroke with one tap.", -1, &panelHintRect, DT_WORDBREAK);
+    RECT panelTitleRect = RectWithSize(infoCard.left + 16, infoCard.top + 16, 160, 18);
+    DrawTextW(backDc, L"Selection", -1, &panelTitleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     if (image_ != nullptr && settings_ != nullptr) {
         SelectObject(backDc, uiFont_);
         SetTextColor(backDc, kTitleColor);
         const std::wstring toolLabel =
             activeTool_ == ActiveTool::Highlighter ? L"Highlighter" :
-            activeTool_ == ActiveTool::Erase ? L"Erase line" :
+            activeTool_ == ActiveTool::EraseLine ? L"Erase line" :
+            activeTool_ == ActiveTool::EraseBrush ? L"Erase pen" :
             activeTool_ == ActiveTool::Eyedropper ? L"Eyedropper" :
             L"Pen";
         const COLORREF inkColor = inkTool_ == ActiveTool::Highlighter ? settings_->highlighterColor : settings_->penColor;
-        const float inkWidth = inkTool_ == ActiveTool::Highlighter ? settings_->highlighterWidth : settings_->penWidth;
+        RECT resolutionLabel = RectWithSize(infoCard.left + 16, infoCard.top + 46, 120, 18);
+        RECT resolutionValue = RectWithSize(infoCard.left + 16, infoCard.top + 66, infoCard.right - infoCard.left - 32, 22);
+        RECT toolLabelRect = RectWithSize(infoCard.left + 16, infoCard.top + 102, 120, 18);
+        RECT toolValueRect = RectWithSize(infoCard.left + 16, infoCard.top + 122, 120, 22);
+        DrawTextW(backDc, L"Resolution", -1, &resolutionLabel, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(backDc, util::FormatRectSize(image_->width, image_->height).c_str(), -1, &resolutionValue, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(backDc, L"Tool", -1, &toolLabelRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(backDc, toolLabel.c_str(), -1, &toolValueRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-        RECT statsRect = RectWithSize(sidebar.left + 16, kToolbarHeight + 338, sidebar.right - sidebar.left - 32, 160);
-        std::wstring stats = L"Resolution\n" + util::FormatRectSize(image_->width, image_->height) + L"\n\n";
-        stats += L"Active tool\n" + toolLabel + L"\n\n";
-        stats += L"Ink color\n" + util::ColorToHex(inkColor) + L"\n\n";
-        stats += L"Ink width\n" + std::to_wstring(static_cast<int>(std::round(inkWidth))) + L" px";
+        RECT swatchRect = RectWithSize(infoCard.right - 96, infoCard.top + 54, 60, 60);
+        HBRUSH swatchBrush = CreateSolidBrush(inkColor);
+        HPEN swatchPen = CreatePen(PS_SOLID, 1, RGB(148, 163, 184));
+        HGDIOBJ oldSwatchBrush = SelectObject(backDc, swatchBrush);
+        HGDIOBJ oldSwatchPen = SelectObject(backDc, swatchPen);
+        RoundRect(backDc, swatchRect.left, swatchRect.top, swatchRect.right, swatchRect.bottom, 18, 18);
+        SelectObject(backDc, oldSwatchBrush);
+        SelectObject(backDc, oldSwatchPen);
+        DeleteObject(swatchBrush);
+        DeleteObject(swatchPen);
+
+        RECT hexRect = RectWithSize(infoCard.right - 114, infoCard.top + 126, 104, 18);
+        SetTextColor(backDc, kMutedColor);
+        DrawTextW(backDc, util::ColorToHex(inkColor).c_str(), -1, &hexRect, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         if (image_->hdrSource) {
-            stats += L"\n\nSource\nHDR";
+            RECT hdrRect = RectWithSize(infoCard.left + 16, infoCard.top + 150, 120, 18);
+            DrawTextW(backDc, L"HDR source", -1, &hdrRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         }
-        DrawTextW(backDc, stats.c_str(), -1, &statsRect, DT_WORDBREAK);
     }
 
     SetViewportOrgEx(backDc, 0, 0, nullptr);
@@ -811,6 +933,21 @@ LRESULT EditorWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         LayoutControls();
         InvalidateRect(hwnd_, nullptr, FALSE);
         return 0;
+    case WM_NCHITTEST: {
+        const LRESULT hit = DefWindowProcW(hwnd_, message, wParam, lParam);
+        if (hit != HTCLIENT) {
+            return hit;
+        }
+        POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        ScreenToClient(hwnd_, &point);
+        if (point.y >= 0 && point.y < kToolbarHeight) {
+            HWND child = ChildWindowFromPointEx(hwnd_, point, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED);
+            if (child == nullptr || child == hwnd_) {
+                return HTCAPTION;
+            }
+        }
+        return HTCLIENT;
+    }
     case WM_ERASEBKGND:
         return 1;
     case WM_DRAWITEM:
@@ -835,7 +972,11 @@ LRESULT EditorWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
             UpdateToolbarState();
             break;
         case ControlErase:
-            activeTool_ = ActiveTool::Erase;
+            activeTool_ = ActiveTool::EraseLine;
+            UpdateToolbarState();
+            break;
+        case ControlEraseBrush:
+            activeTool_ = ActiveTool::EraseBrush;
             UpdateToolbarState();
             break;
         case ControlEyedropper:
@@ -889,20 +1030,24 @@ LRESULT EditorWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_LBUTTONDOWN: {
         const POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         const auto imagePoint = ClientToImage(point);
-        if (!imagePoint.has_value()) {
-            break;
-        }
-        if (activeTool_ == ActiveTool::Pen || activeTool_ == ActiveTool::Highlighter) {
+        if ((activeTool_ == ActiveTool::Pen || activeTool_ == ActiveTool::Highlighter) && imagePoint.has_value()) {
             SetCapture(hwnd_);
             BeginStroke(*imagePoint);
             InvalidateCanvas(false);
             return 0;
         }
-        if (activeTool_ == ActiveTool::Erase) {
+        if (activeTool_ == ActiveTool::EraseLine && imagePoint.has_value()) {
+            SetCapture(hwnd_);
             EraseStrokeAt(*imagePoint);
             return 0;
         }
-        if (activeTool_ == ActiveTool::Eyedropper) {
+        if (activeTool_ == ActiveTool::EraseBrush && imagePoint.has_value()) {
+            SetCapture(hwnd_);
+            drawing_ = true;
+            EraseBrushAt(*imagePoint);
+            return 0;
+        }
+        if (activeTool_ == ActiveTool::Eyedropper && imagePoint.has_value()) {
             PickColorAt(*imagePoint);
             return 0;
         }
@@ -911,21 +1056,47 @@ LRESULT EditorWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_MOUSEMOVE:
         if (drawing_) {
             const auto imagePoint = ClientToImage({GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
+            if (activeTool_ == ActiveTool::EraseBrush) {
+                if (imagePoint.has_value()) {
+                    EraseBrushAt(*imagePoint);
+                }
+                return 0;
+            }
             if (imagePoint.has_value()) {
                 ExtendStroke(*imagePoint);
-                InvalidateCanvas(false);
+            } else {
+                BreakStroke();
+            }
+            InvalidateCanvas(false);
+            return 0;
+        }
+        if ((wParam & MK_LBUTTON) != 0U && activeTool_ == ActiveTool::EraseLine) {
+            const auto imagePoint = ClientToImage({GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
+            if (imagePoint.has_value()) {
+                EraseStrokeAt(*imagePoint);
             }
             return 0;
         }
         break;
     case WM_LBUTTONUP:
         if (drawing_) {
+            if (activeTool_ == ActiveTool::EraseBrush) {
+                drawing_ = false;
+                ReleaseCapture();
+                return 0;
+            }
             const auto imagePoint = ClientToImage({GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
             if (imagePoint.has_value()) {
                 ExtendStroke(*imagePoint);
+            } else {
+                BreakStroke();
             }
             ReleaseCapture();
             EndStroke();
+            return 0;
+        }
+        if (activeTool_ == ActiveTool::EraseLine) {
+            ReleaseCapture();
             return 0;
         }
         break;

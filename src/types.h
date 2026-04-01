@@ -10,7 +10,8 @@ struct FloatPoint {
 enum class ActiveTool {
     Pen,
     Highlighter,
-    Erase,
+    EraseLine,
+    EraseBrush,
     Eyedropper,
 };
 
