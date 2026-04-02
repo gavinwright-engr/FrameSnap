@@ -383,9 +383,8 @@ void ScreenshotterApp::BeginCapture() {
             PlaySoundW(reinterpret_cast<LPCWSTR>(captureSound.data()), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT | SND_NOSTOP);
         }
     }
-    frozenFrame_ = captureEngine_.Capture(util::VirtualScreenBounds());
+    frozenFrame_ = util::CaptureScreenSnapshotGdi(util::VirtualScreenBounds());
     if (frozenFrame_ == nullptr) {
-        captureEngine_.RefreshOutputs();
         frozenFrame_ = captureEngine_.Capture(util::VirtualScreenBounds());
     }
     overlay_->BeginSession(settings_, hotkeyStart, frozenFrame_);

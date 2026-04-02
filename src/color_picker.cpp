@@ -3,10 +3,103 @@
 namespace {
 
 constexpr wchar_t kColorPickerClassName[] = L"ScreenshotterColorPicker";
-constexpr int kWheelMargin = 10;
-constexpr int kBottomPreviewHeight = 66;
-constexpr COLORREF kPickerBackground = RGB(255, 255, 255);
+constexpr int kWheelMargin = 16;
+constexpr int kBottomPreviewHeight = 86;
+constexpr COLORREF kPickerBackground = RGB(251, 253, 255);
 constexpr COLORREF kPickerBorder = RGB(214, 223, 234);
+constexpr COLORREF kPickerInnerBorder = RGB(226, 232, 240);
+
+struct WheelCache {
+    int diameter{};
+    BITMAPINFO bmi{};
+    std::vector<std::uint8_t> pixels;
+};
+
+WheelCache& CachedWheel() {
+    static WheelCache cache;
+    return cache;
+}
+
+COLORREF WheelHsvToColor(float hue, float saturation, float value) {
+    hue = std::fmod(std::max(hue, 0.0f), 360.0f);
+    saturation = std::clamp(saturation, 0.0f, 1.0f);
+    value = std::clamp(value, 0.0f, 1.0f);
+
+    const float chroma = value * saturation;
+    const float x = chroma * (1.0f - std::fabs(std::fmod(hue / 60.0f, 2.0f) - 1.0f));
+    const float m = value - chroma;
+    float r = 0.0f;
+    float g = 0.0f;
+    float b = 0.0f;
+
+    if (hue < 60.0f) {
+        r = chroma;
+        g = x;
+    } else if (hue < 120.0f) {
+        r = x;
+        g = chroma;
+    } else if (hue < 180.0f) {
+        g = chroma;
+        b = x;
+    } else if (hue < 240.0f) {
+        g = x;
+        b = chroma;
+    } else if (hue < 300.0f) {
+        r = x;
+        b = chroma;
+    } else {
+        r = chroma;
+        b = x;
+    }
+
+    return RGB(
+        static_cast<int>((r + m) * 255.0f),
+        static_cast<int>((g + m) * 255.0f),
+        static_cast<int>((b + m) * 255.0f));
+}
+
+void EnsureWheelCache(int diameter) {
+    auto& cache = CachedWheel();
+    if (cache.diameter == diameter && !cache.pixels.empty()) {
+        return;
+    }
+
+    cache = {};
+    cache.diameter = diameter;
+    cache.bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    cache.bmi.bmiHeader.biWidth = diameter;
+    cache.bmi.bmiHeader.biHeight = -diameter;
+    cache.bmi.bmiHeader.biPlanes = 1;
+    cache.bmi.bmiHeader.biBitCount = 32;
+    cache.bmi.bmiHeader.biCompression = BI_RGB;
+    cache.pixels.assign(static_cast<std::size_t>(diameter) * static_cast<std::size_t>(diameter) * 4U, 0);
+
+    const float center = diameter * 0.5f;
+    const float radius = center - 1.0f;
+    for (int y = 0; y < diameter; ++y) {
+        for (int x = 0; x < diameter; ++x) {
+            const float dx = x - center;
+            const float dy = y - center;
+            const float distance = std::sqrt(dx * dx + dy * dy);
+            const auto index = (static_cast<std::size_t>(y) * static_cast<std::size_t>(diameter) + static_cast<std::size_t>(x)) * 4U;
+            if (distance > radius) {
+                cache.pixels[index + 3] = 0;
+                continue;
+            }
+            float angle = std::atan2(dy, dx);
+            if (angle < 0.0f) {
+                angle += std::numbers::pi_v<float> * 2.0f;
+            }
+            const float hue = angle * 180.0f / std::numbers::pi_v<float>;
+            const float saturation = distance / radius;
+            const COLORREF color = WheelHsvToColor(hue, saturation, 1.0f);
+            cache.pixels[index + 0] = GetBValue(color);
+            cache.pixels[index + 1] = GetGValue(color);
+            cache.pixels[index + 2] = GetRValue(color);
+            cache.pixels[index + 3] = 255;
+        }
+    }
+}
 
 }  // namespace
 
@@ -97,42 +190,18 @@ void ColorPickerControl::Paint() {
     const RECT wheel = WheelRect();
     const int wheelWidth = wheel.right - wheel.left;
     const int wheelHeight = wheel.bottom - wheel.top;
-    BITMAPINFO bmi{};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = wheelWidth;
-    bmi.bmiHeader.biHeight = -wheelHeight;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
+    EnsureWheelCache(wheelWidth);
+    const auto& wheelCache = CachedWheel();
+    StretchDIBits(backDc, wheel.left, wheel.top, wheelWidth, wheelHeight, 0, 0, wheelWidth, wheelHeight, wheelCache.pixels.data(), &wheelCache.bmi,
+        DIB_RGB_COLORS, SRCCOPY);
 
-    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(wheelWidth) * static_cast<std::size_t>(wheelHeight) * 4U);
-    const float centerX = wheelWidth / 2.0f;
-    const float centerY = wheelHeight / 2.0f;
-    const float radius = std::min(centerX, centerY) - 1.0f;
-    for (int y = 0; y < wheelHeight; ++y) {
-        for (int x = 0; x < wheelWidth; ++x) {
-            const float dx = x - centerX;
-            const float dy = y - centerY;
-            const float distance = std::sqrt(dx * dx + dy * dy);
-            const auto index = (static_cast<std::size_t>(y) * wheelWidth + static_cast<std::size_t>(x)) * 4U;
-            if (distance > radius) {
-                pixels[index + 3] = 255;
-                continue;
-            }
-            float angle = std::atan2(dy, dx);
-            if (angle < 0.0f) {
-                angle += std::numbers::pi_v<float> * 2.0f;
-            }
-            const float hue = angle * 180.0f / std::numbers::pi_v<float>;
-            const float saturation = distance / radius;
-            const COLORREF color = HsvToColor(hue, saturation, 1.0f);
-            pixels[index + 0] = GetBValue(color);
-            pixels[index + 1] = GetGValue(color);
-            pixels[index + 2] = GetRValue(color);
-            pixels[index + 3] = 255;
-        }
-    }
-    StretchDIBits(backDc, wheel.left, wheel.top, wheelWidth, wheelHeight, 0, 0, wheelWidth, wheelHeight, pixels.data(), &bmi, DIB_RGB_COLORS, SRCCOPY);
+    HPEN innerPen = CreatePen(PS_SOLID, 1, kPickerInnerBorder);
+    oldPen = SelectObject(backDc, innerPen);
+    oldBrush = SelectObject(backDc, GetStockObject(HOLLOW_BRUSH));
+    Ellipse(backDc, wheel.left, wheel.top, wheel.right, wheel.bottom);
+    SelectObject(backDc, oldBrush);
+    SelectObject(backDc, oldPen);
+    DeleteObject(innerPen);
 
     const RECT valueRect = ValueRect();
     for (int y = valueRect.top; y < valueRect.bottom; ++y) {
@@ -143,23 +212,46 @@ void ColorPickerControl::Paint() {
         FillRect(backDc, &row, brush);
         DeleteObject(brush);
     }
+    HPEN valuePen = CreatePen(PS_SOLID, 1, kPickerInnerBorder);
+    oldPen = SelectObject(backDc, valuePen);
+    oldBrush = SelectObject(backDc, GetStockObject(HOLLOW_BRUSH));
+    RoundRect(backDc, valueRect.left - 1, valueRect.top - 1, valueRect.right + 1, valueRect.bottom + 1, 10, 10);
+    SelectObject(backDc, oldBrush);
+    SelectObject(backDc, oldPen);
+    DeleteObject(valuePen);
 
     const float angle = hue_ * std::numbers::pi_v<float> / 180.0f;
     const int selectorX = static_cast<int>(wheel.left + wheelWidth / 2.0f + std::cos(angle) * saturation_ * (wheelWidth / 2.0f - 1.0f));
     const int selectorY = static_cast<int>(wheel.top + wheelHeight / 2.0f + std::sin(angle) * saturation_ * (wheelHeight / 2.0f - 1.0f));
-    Ellipse(backDc, selectorX - 4, selectorY - 4, selectorX + 4, selectorY + 4);
+    HPEN selectorPen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+    HBRUSH selectorBrush = CreateSolidBrush(HsvToColor(hue_, saturation_, value_));
+    oldPen = SelectObject(backDc, selectorPen);
+    oldBrush = SelectObject(backDc, selectorBrush);
+    Ellipse(backDc, selectorX - 6, selectorY - 6, selectorX + 6, selectorY + 6);
+    SelectObject(backDc, oldBrush);
+    SelectObject(backDc, oldPen);
+    DeleteObject(selectorBrush);
+    DeleteObject(selectorPen);
 
     const int valueY = valueRect.top + static_cast<int>((1.0f - value_) * static_cast<float>(valueRect.bottom - valueRect.top));
+    HPEN markerPen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+    oldPen = SelectObject(backDc, markerPen);
     MoveToEx(backDc, valueRect.left - 2, valueY, nullptr);
     LineTo(backDc, valueRect.right + 2, valueY);
+    SelectObject(backDc, oldPen);
+    DeleteObject(markerPen);
 
-    RECT swatch{wheel.left, wheel.bottom + 16, valueRect.right, wheel.bottom + 16 + 46};
+    RECT swatch{wheel.left, wheel.bottom + 18, valueRect.right, wheel.bottom + 18 + 52};
     HBRUSH swatchBrush = CreateSolidBrush(GetColor());
     FillRect(backDc, &swatch, swatchBrush);
     DeleteObject(swatchBrush);
-    HBRUSH frameBrush = CreateSolidBrush(kPickerBorder);
-    FrameRect(backDc, &swatch, frameBrush);
-    DeleteObject(frameBrush);
+    HPEN swatchPen = CreatePen(PS_SOLID, 1, kPickerBorder);
+    oldPen = SelectObject(backDc, swatchPen);
+    oldBrush = SelectObject(backDc, GetStockObject(HOLLOW_BRUSH));
+    RoundRect(backDc, swatch.left, swatch.top, swatch.right, swatch.bottom, 14, 14);
+    SelectObject(backDc, oldBrush);
+    SelectObject(backDc, oldPen);
+    DeleteObject(swatchPen);
 
     BitBlt(hdc, 0, 0, width, height, backDc, 0, 0, SRCCOPY);
     SelectObject(backDc, oldBitmap);

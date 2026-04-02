@@ -62,6 +62,9 @@ private:
     HWND undoButton_{};
     HWND redoButton_{};
     HWND saveButton_{};
+    HWND minimizeButton_{};
+    HWND maximizeButton_{};
+    HWND closeButton_{};
     HWND widthSlider_{};
     std::unique_ptr<ColorPickerControl> colorPicker_;
     std::shared_ptr<ImageData> image_;

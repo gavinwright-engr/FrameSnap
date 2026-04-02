@@ -10,6 +10,7 @@
 #include <shellapi.h>
 #include <shlobj_core.h>
 #include <shlwapi.h>
+#include <uxtheme.h>
 #include <wincodec.h>
 #include <wrl/client.h>
 

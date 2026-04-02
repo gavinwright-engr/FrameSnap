@@ -13,19 +13,25 @@ public:
 
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK FreezeWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
+    LRESULT HandleFreezeMessage(UINT message, WPARAM wParam, LPARAM lParam);
     bool EnsureWindow();
+    bool EnsureFreezeWindow();
     HCURSOR CreateCaptureCursor() const;
     void Paint();
+    void PaintFrozenFrame();
     void FinishSelection(const RECT& rect, bool clickModeCompletion);
     POINT ScreenFromClientPoint(POINT point) const;
     RECT CurrentSelectionRect() const;
     RECT CurrentVisualBounds() const;
     void InvalidateVisualDelta();
+    void UpdateWindowRegion();
 
     HINSTANCE instance_{};
     HWND owner_{};
     HCURSOR captureCursor_{};
+    HWND freezeHwnd_{};
     HWND hwnd_{};
     AppSettings settings_{};
     bool active_{false};

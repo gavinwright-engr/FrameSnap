@@ -2,6 +2,76 @@
 
 namespace util {
 
+namespace {
+
+struct GdiSnapshotCache {
+    HDC memoryDc{};
+    HBITMAP bitmap{};
+    void* bits{};
+    int width{};
+    int height{};
+
+    ~GdiSnapshotCache() {
+        if (bitmap != nullptr) {
+            DeleteObject(bitmap);
+        }
+        if (memoryDc != nullptr) {
+            DeleteDC(memoryDc);
+        }
+    }
+};
+
+GdiSnapshotCache& SnapshotCache() {
+    static GdiSnapshotCache cache;
+    return cache;
+}
+
+bool EnsureSnapshotCache(HDC screenDc, int width, int height, GdiSnapshotCache& cache) {
+    if (cache.memoryDc == nullptr) {
+        cache.memoryDc = CreateCompatibleDC(screenDc);
+        if (cache.memoryDc == nullptr) {
+            return false;
+        }
+    }
+
+    if (cache.bitmap != nullptr && cache.width == width && cache.height == height && cache.bits != nullptr) {
+        return true;
+    }
+
+    if (cache.bitmap != nullptr) {
+        DeleteObject(cache.bitmap);
+        cache.bitmap = nullptr;
+        cache.bits = nullptr;
+    }
+
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    cache.bitmap = CreateDIBSection(screenDc, &info, DIB_RGB_COLORS, &cache.bits, nullptr, 0);
+    cache.width = width;
+    cache.height = height;
+    if (cache.bitmap == nullptr || cache.bits == nullptr) {
+        if (cache.bitmap != nullptr) {
+            DeleteObject(cache.bitmap);
+            cache.bitmap = nullptr;
+        }
+        cache.bits = nullptr;
+        cache.width = 0;
+        cache.height = 0;
+        return false;
+    }
+
+    SelectObject(cache.memoryDc, cache.bitmap);
+    return true;
+}
+
+}  // namespace
+
 std::wstring HResultMessage(HRESULT hr) {
     wchar_t* buffer = nullptr;
     const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
@@ -149,6 +219,40 @@ std::wstring ColorToHex(COLORREF color) {
     wchar_t buffer[16]{};
     swprintf_s(buffer, L"#%02X%02X%02X", GetRValue(color), GetGValue(color), GetBValue(color));
     return buffer;
+}
+
+std::shared_ptr<ImageData> CaptureScreenSnapshotGdi(const RECT& bounds) {
+    const RECT normalized = NormalizeRect(bounds);
+    if (IsRectEmptySafe(normalized)) {
+        return nullptr;
+    }
+
+    const int width = normalized.right - normalized.left;
+    const int height = normalized.bottom - normalized.top;
+    HDC screenDc = GetDC(nullptr);
+    if (screenDc == nullptr) {
+        return nullptr;
+    }
+
+    auto& cache = SnapshotCache();
+    if (!EnsureSnapshotCache(screenDc, width, height, cache)) {
+        ReleaseDC(nullptr, screenDc);
+        return nullptr;
+    }
+    const BOOL copied = BitBlt(cache.memoryDc, 0, 0, width, height, screenDc, normalized.left, normalized.top, SRCCOPY);
+
+    auto image = std::make_shared<ImageData>();
+    if (copied) {
+        image->width = width;
+        image->height = height;
+        image->hdrSource = false;
+        image->sourceRect = normalized;
+        image->pixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 4U);
+        memcpy(image->pixels.data(), cache.bits, image->pixels.size());
+    }
+
+    ReleaseDC(nullptr, screenDc);
+    return copied ? image : nullptr;
 }
 
 std::shared_ptr<ImageData> CropImage(const std::shared_ptr<ImageData>& image, const RECT& selection) {

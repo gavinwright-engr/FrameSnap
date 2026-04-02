@@ -19,6 +19,7 @@ RECT IntersectRectSafe(const RECT& a, const RECT& b);
 bool IsRectEmptySafe(const RECT& rect);
 SIZE RectSize(const RECT& rect);
 std::wstring ColorToHex(COLORREF color);
+std::shared_ptr<ImageData> CaptureScreenSnapshotGdi(const RECT& bounds);
 std::shared_ptr<ImageData> CropImage(const std::shared_ptr<ImageData>& image, const RECT& selection);
 HICON CreateOneShotAppIcon(int size);
 void WriteMetricsLog(const CaptureMetrics& metrics, const ImageData& image);
