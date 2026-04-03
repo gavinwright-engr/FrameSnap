@@ -1,12 +1,14 @@
 #include "overlay_window.h"
 
 #include "util.h"
+#include <mmsystem.h>
 
 namespace {
 
-constexpr wchar_t kOverlayClassName[] = L"ScreenshotterOverlayWindow";
-constexpr wchar_t kFreezeClassName[] = L"ScreenshotterFreezeWindow";
+constexpr wchar_t kOverlayClassName[] = L"FrameSnapOverlayWindow";
+constexpr wchar_t kFreezeClassName[] = L"FrameSnapFreezeWindow";
 constexpr BYTE kOverlayAlpha = 175;
+constexpr UINT_PTR kPresentTimerId = 1;
 
 RECT UnionRectSafe(const RECT& a, const RECT& b) {
     if (util::IsRectEmptySafe(a)) {
@@ -21,6 +23,22 @@ RECT UnionRectSafe(const RECT& a, const RECT& b) {
         std::max(a.right, b.right),
         std::max(a.bottom, b.bottom),
     };
+}
+
+UINT RefreshIntervalMsForPoint(POINT screenPoint) {
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    const HMONITOR monitor = MonitorFromPoint(screenPoint, MONITOR_DEFAULTTONEAREST);
+    if (monitor != nullptr && GetMonitorInfoW(monitor, &info)) {
+        DEVMODEW mode{};
+        mode.dmSize = sizeof(mode);
+        if (EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode) &&
+            mode.dmDisplayFrequency > 1U &&
+            mode.dmDisplayFrequency != 0xFFFFFFFFU) {
+            return std::clamp(static_cast<UINT>(std::lround(1000.0 / static_cast<double>(mode.dmDisplayFrequency))), 4U, 17U);
+        }
+    }
+    return 16U;
 }
 
 }  // namespace
@@ -158,6 +176,7 @@ bool OverlayWindow::BeginSession(const AppSettings& settings, std::chrono::stead
     anchorPoint_ = {};
     hasLastVisualBounds_ = false;
     lastVisualBounds_ = {};
+    pendingPresent_ = false;
 
     if (!EnsureWindow()) {
         return false;
@@ -198,7 +217,13 @@ bool OverlayWindow::BeginSession(const AppSettings& settings, std::chrono::stead
     if (captureCursor_ != nullptr) {
         SetCursor(captureCursor_);
     }
+    if (!highResTimerEnabled_) {
+        highResTimerEnabled_ = timeBeginPeriod(1) == TIMERR_NOERROR;
+    }
     active_ = true;
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    ConfigurePresentTimer(cursor);
     UpdateWindowRegion();
     InvalidateRect(hwnd_, nullptr, FALSE);
     UpdateWindow(hwnd_);
@@ -207,6 +232,7 @@ bool OverlayWindow::BeginSession(const AppSettings& settings, std::chrono::stead
 }
 
 void OverlayWindow::Cancel() {
+    KillTimer(hwnd_, kPresentTimerId);
     if (freezeHwnd_ != nullptr) {
         ShowWindow(freezeHwnd_, SW_HIDE);
     }
@@ -224,6 +250,11 @@ void OverlayWindow::Cancel() {
     anchorPoint_ = {};
     hasLastVisualBounds_ = false;
     frozenFrame_.reset();
+    pendingPresent_ = false;
+    if (highResTimerEnabled_) {
+        timeEndPeriod(1);
+        highResTimerEnabled_ = false;
+    }
     if (hwnd_ != nullptr) {
         UpdateWindowRegion();
     }
@@ -306,6 +337,28 @@ void OverlayWindow::InvalidateVisualDelta() {
     InvalidateRect(hwnd_, util::IsRectEmptySafe(dirty) ? nullptr : &dirty, FALSE);
     lastVisualBounds_ = current;
     hasLastVisualBounds_ = !util::IsRectEmptySafe(current);
+}
+
+void OverlayWindow::PresentNow() {
+    if (hwnd_ == nullptr || !active_) {
+        return;
+    }
+    InvalidateVisualDelta();
+    UpdateWindow(hwnd_);
+    DwmFlush();
+}
+
+void OverlayWindow::ConfigurePresentTimer(POINT screenPoint) {
+    if (hwnd_ == nullptr) {
+        return;
+    }
+    const UINT interval = RefreshIntervalMsForPoint(screenPoint);
+    if (interval == presentIntervalMs_ && active_) {
+        return;
+    }
+    presentIntervalMs_ = interval;
+    KillTimer(hwnd_, kPresentTimerId);
+    SetTimer(hwnd_, kPresentTimerId, presentIntervalMs_, nullptr);
 }
 
 void OverlayWindow::UpdateWindowRegion() {
@@ -482,11 +535,13 @@ LRESULT OverlayWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case WM_KEYDOWN:
         if (wParam == VK_ESCAPE) {
             Cancel();
+            PostMessageW(owner_, WM_APP_CAPTURE_CANCELLED, 0, 0);
             return 0;
         }
         break;
     case WM_RBUTTONUP:
         Cancel();
+        PostMessageW(owner_, WM_APP_CAPTURE_CANCELLED, 0, 0);
         return 0;
     case WM_LBUTTONDOWN:
         mouseDown_ = true;
@@ -498,8 +553,8 @@ LRESULT OverlayWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         if (anchorSet_) {
             dragCurrent_ = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         }
-        UpdateWindowRegion();
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        ConfigurePresentTimer(ScreenFromClientPoint(dragCurrent_));
+        PresentNow();
         return 0;
     case WM_MOUSEMOVE: {
         dragCurrent_ = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
@@ -510,13 +565,15 @@ LRESULT OverlayWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
                 dragging_ = true;
             }
         }
-        InvalidateVisualDelta();
+        ConfigurePresentTimer(ScreenFromClientPoint(dragCurrent_));
+        pendingPresent_ = true;
         return 0;
     }
     case WM_LBUTTONUP: {
         const POINT current{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         dragCurrent_ = current;
         mouseDown_ = false;
+        pendingPresent_ = false;
 
         if (dragging_) {
             FinishSelection(CurrentSelectionRect(), false);
@@ -528,8 +585,7 @@ LRESULT OverlayWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             if (!anchorSet_) {
                 anchorSet_ = true;
                 anchorPoint_ = screenPoint;
-                UpdateWindowRegion();
-                InvalidateVisualDelta();
+                PresentNow();
             } else {
                 const RECT rect{anchorPoint_.x, anchorPoint_.y, screenPoint.x, screenPoint.y};
                 FinishSelection(rect, true);
@@ -537,6 +593,13 @@ LRESULT OverlayWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         }
         return 0;
     }
+    case WM_TIMER:
+        if (wParam == kPresentTimerId && pendingPresent_) {
+            pendingPresent_ = false;
+            PresentNow();
+            return 0;
+        }
+        break;
     case WM_PAINT:
         Paint();
         return 0;

@@ -2,13 +2,13 @@ cmake_minimum_required(VERSION 3.25)
 
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
-project(OneShot LANGUAGES CXX RC)
+project(FrameSnap LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(OneShot WIN32
+add_executable(FrameSnap WIN32
     resources/app.rc
     src/app.cpp
     src/app.h
@@ -39,14 +39,14 @@ add_executable(OneShot WIN32
     src/util.h
 )
 
-target_compile_definitions(OneShot PRIVATE
+target_compile_definitions(FrameSnap PRIVATE
     UNICODE
     _UNICODE
     NOMINMAX
     WIN32_LEAN_AND_MEAN
 )
 
-target_compile_options(OneShot PRIVATE
+target_compile_options(FrameSnap PRIVATE
     /W4
     /permissive-
     /EHsc
@@ -54,7 +54,7 @@ target_compile_options(OneShot PRIVATE
     /Zc:__cplusplus
 )
 
-target_link_libraries(OneShot PRIVATE
+target_link_libraries(FrameSnap PRIVATE
     advapi32
     comctl32
     d2d1
@@ -70,7 +70,7 @@ target_link_libraries(OneShot PRIVATE
     winmm
 )
 
-set_target_properties(OneShot PROPERTIES
+set_target_properties(FrameSnap PROPERTIES
     WIN32_EXECUTABLE YES
     VS_GLOBAL_DpiAwareness "PerMonitorV2"
 )

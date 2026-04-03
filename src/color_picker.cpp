@@ -2,12 +2,12 @@
 
 namespace {
 
-constexpr wchar_t kColorPickerClassName[] = L"ScreenshotterColorPicker";
+constexpr wchar_t kColorPickerClassName[] = L"FrameSnapColorPicker";
 constexpr int kWheelMargin = 16;
 constexpr int kBottomPreviewHeight = 86;
-constexpr COLORREF kPickerBackground = RGB(251, 253, 255);
-constexpr COLORREF kPickerBorder = RGB(214, 223, 234);
-constexpr COLORREF kPickerInnerBorder = RGB(226, 232, 240);
+constexpr COLORREF kPickerBackground = RGB(20, 27, 36);
+constexpr COLORREF kPickerBorder = RGB(43, 55, 72);
+constexpr COLORREF kPickerInnerBorder = RGB(61, 75, 96);
 
 struct WheelCache {
     int diameter{};

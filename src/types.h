@@ -22,6 +22,8 @@ struct HotkeyBinding {
 
 struct AppSettings {
     HotkeyBinding hotkey{};
+    bool runAtStartupEnabled{true};
+    bool printScreenOverrideEnabled{false};
     bool autoSaveEnabled{true};
     bool clickModeEnabled{true};
     bool soundEnabled{true};

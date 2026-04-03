@@ -164,7 +164,7 @@ std::filesystem::path LocalAppDataPath() {
 }
 
 std::filesystem::path EnsureAppDirectory() {
-    auto directory = LocalAppDataPath() / L"OneShot";
+    auto directory = LocalAppDataPath() / L"FrameSnap";
     std::error_code error;
     std::filesystem::create_directories(directory, error);
     return directory;
@@ -174,7 +174,7 @@ std::filesystem::path DefaultSaveFolder() {
     PWSTR path = nullptr;
     std::filesystem::path result = EnsureAppDirectory() / L"Captures";
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Pictures, 0, nullptr, &path))) {
-        result = std::filesystem::path(path) / L"OneShot";
+        result = std::filesystem::path(path) / L"FrameSnap";
         CoTaskMemFree(path);
     }
     std::error_code error;
@@ -283,7 +283,7 @@ std::shared_ptr<ImageData> CropImage(const std::shared_ptr<ImageData>& image, co
     return cropped;
 }
 
-HICON CreateOneShotAppIcon(int size) {
+HICON CreateFrameSnapAppIcon(int size) {
     const int extent = std::max(16, size);
     Gdiplus::Bitmap bitmap(extent, extent, PixelFormat32bppARGB);
     Gdiplus::Graphics graphics(&bitmap);
@@ -343,7 +343,7 @@ void WriteMetricsLog(const CaptureMetrics& metrics, const ImageData& image) {
            << L"\n";
 }
 
-bool SetRunAtStartup(bool enabled) {
+bool SetRunAtStartup(bool enabled, bool backgroundLaunch) {
     HKEY key = nullptr;
     if (RegCreateKeyExW(HKEY_CURRENT_USER,
             L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
@@ -361,16 +361,73 @@ bool SetRunAtStartup(bool enabled) {
     GetModuleFileNameW(nullptr, exePath, MAX_PATH);
     bool success = false;
     if (enabled) {
+        std::wstring command = L"\"";
+        command += exePath;
+        command += L"\"";
+        if (backgroundLaunch) {
+            command += L" --background";
+        }
         success = RegSetValueExW(key,
-                      L"OneShot",
+                      L"FrameSnap",
                       0,
                       REG_SZ,
-                      reinterpret_cast<const BYTE*>(exePath),
-                      static_cast<DWORD>((wcslen(exePath) + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
+                      reinterpret_cast<const BYTE*>(command.c_str()),
+                      static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
     } else {
-        success = RegDeleteValueW(key, L"OneShot") == ERROR_SUCCESS || GetLastError() == ERROR_FILE_NOT_FOUND;
+        success = RegDeleteValueW(key, L"FrameSnap") == ERROR_SUCCESS || GetLastError() == ERROR_FILE_NOT_FOUND;
     }
     RegCloseKey(key);
+    return success;
+}
+
+bool IsPrintScreenSnippingEnabled() {
+    DWORD value = 1;
+    DWORD size = sizeof(value);
+    const LONG result = RegGetValueW(
+        HKEY_CURRENT_USER,
+        L"Control Panel\\Keyboard",
+        L"PrintScreenKeyForSnippingEnabled",
+        RRF_RT_REG_DWORD,
+        nullptr,
+        &value,
+        &size);
+    if (result != ERROR_SUCCESS) {
+        return true;
+    }
+    return value != 0;
+}
+
+bool SetPrintScreenSnippingEnabled(bool enabled) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER,
+            L"Control Panel\\Keyboard",
+            0,
+            nullptr,
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            nullptr,
+            &key,
+            nullptr) != ERROR_SUCCESS) {
+        return false;
+    }
+
+    const DWORD value = enabled ? 1U : 0U;
+    const bool success = RegSetValueExW(key,
+                             L"PrintScreenKeyForSnippingEnabled",
+                             0,
+                             REG_DWORD,
+                             reinterpret_cast<const BYTE*>(&value),
+                             sizeof(value)) == ERROR_SUCCESS;
+    RegCloseKey(key);
+    if (success) {
+        SendMessageTimeoutW(HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            reinterpret_cast<LPARAM>(L"Control Panel\\Keyboard"),
+            SMTO_ABORTIFHUNG,
+            200,
+            nullptr);
+    }
     return success;
 }
 

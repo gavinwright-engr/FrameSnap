@@ -6,8 +6,8 @@
 
 namespace {
 
-constexpr wchar_t kMainClassName[] = L"ScreenshotterMainWindow";
-constexpr wchar_t kAppName[] = L"OneShot";
+constexpr wchar_t kMainClassName[] = L"FrameSnapMainWindow";
+constexpr wchar_t kAppName[] = L"FrameSnap";
 constexpr UINT kTrayMessage = WM_APP + 20;
 constexpr UINT kHotkeyId = 1;
 
@@ -17,6 +17,66 @@ enum TrayCommand {
     TrayOpenFolder,
     TrayExit,
 };
+
+FrameSnapApp* gHookTarget = nullptr;
+
+struct ChimeSpec {
+    double leadInSeconds{};
+    double bodySeconds{};
+    double tailSeconds{};
+    double splitSeconds{};
+    double blendSeconds{};
+    double attackSeconds{};
+    double releaseSeconds{};
+    double firstBaseHz{};
+    double firstHarmonicHz{};
+    double secondBaseHz{};
+    double secondHarmonicHz{};
+    double firstMix{};
+    double firstHarmonicMix{};
+    double secondMix{};
+    double secondHarmonicMix{};
+    double outputGain{};
+};
+
+bool IsModifierKey(UINT virtualKey) {
+    switch (virtualKey) {
+    case VK_SHIFT:
+    case VK_LSHIFT:
+    case VK_RSHIFT:
+    case VK_CONTROL:
+    case VK_LCONTROL:
+    case VK_RCONTROL:
+    case VK_MENU:
+    case VK_LMENU:
+    case VK_RMENU:
+    case VK_LWIN:
+    case VK_RWIN:
+        return true;
+    default:
+        return false;
+    }
+}
+
+UINT CurrentModifierFlags(UINT activeKey = 0) {
+    UINT modifiers = 0;
+    const auto isDown = [](int vk) {
+        return (GetAsyncKeyState(vk) & 0x8000) != 0;
+    };
+    if (isDown(VK_CONTROL) || activeKey == VK_CONTROL || activeKey == VK_LCONTROL || activeKey == VK_RCONTROL) {
+        modifiers |= MOD_CONTROL;
+    }
+    if (isDown(VK_MENU) || activeKey == VK_MENU || activeKey == VK_LMENU || activeKey == VK_RMENU) {
+        modifiers |= MOD_ALT;
+    }
+    if (isDown(VK_SHIFT) || activeKey == VK_SHIFT || activeKey == VK_LSHIFT || activeKey == VK_RSHIFT) {
+        modifiers |= MOD_SHIFT;
+    }
+    if (isDown(VK_LWIN) || isDown(VK_RWIN) || activeKey == VK_LWIN || activeKey == VK_RWIN) {
+        modifiers |= MOD_WIN;
+    }
+    return modifiers;
+}
 
 void AppendStartupLog(const std::wstring& line) {
     const auto path = util::EnsureAppDirectory() / L"startup.log";
@@ -32,38 +92,80 @@ void AppendStartupLog(const std::wstring& line) {
 }
 
 std::vector<std::uint8_t> CreateCaptureSoundWav() {
+    constexpr ChimeSpec kSpec{
+        .leadInSeconds = 0.010,
+        .bodySeconds = 0.106,
+        .tailSeconds = 0.018,
+        .splitSeconds = 0.047,
+        .blendSeconds = 0.010,
+        .attackSeconds = 0.008,
+        .releaseSeconds = 0.030,
+        .firstBaseHz = 1046.50,
+        .firstHarmonicHz = 1567.98,
+        .secondBaseHz = 1318.51,
+        .secondHarmonicHz = 1975.53,
+        .firstMix = 0.72,
+        .firstHarmonicMix = 0.18,
+        .secondMix = 0.60,
+        .secondHarmonicMix = 0.14,
+        .outputGain = 0.26,
+    };
     constexpr int kSampleRate = 22050;
-    constexpr double kDurationSeconds = 0.095;
-    constexpr double kSplitSeconds = 0.045;
-    constexpr double kAttackSeconds = 0.004;
-    constexpr double kReleaseSeconds = 0.026;
     constexpr double kPi = 3.14159265358979323846;
-    const int sampleCount = static_cast<int>(kSampleRate * kDurationSeconds);
+    const int leadInSamples = std::max(1, static_cast<int>(std::lround(kSampleRate * kSpec.leadInSeconds)));
+    const int bodySamples = std::max(1, static_cast<int>(std::lround(kSampleRate * kSpec.bodySeconds)));
+    const int tailSamples = std::max(1, static_cast<int>(std::lround(kSampleRate * kSpec.tailSeconds)));
+    const int attackSamples = std::max(2, static_cast<int>(std::lround(kSampleRate * kSpec.attackSeconds)));
+    const int releaseSamples = std::max(2, static_cast<int>(std::lround(kSampleRate * kSpec.releaseSeconds)));
+    const int totalSamples = leadInSamples + bodySamples + tailSamples;
 
     std::vector<std::int16_t> samples;
-    samples.reserve(static_cast<size_t>(sampleCount));
-    for (int i = 0; i < sampleCount; ++i) {
+    samples.reserve(static_cast<size_t>(totalSamples));
+    const auto easeInOut = [](double progress) {
+        progress = std::clamp(progress, 0.0, 1.0);
+        return 0.5 - 0.5 * std::cos(progress * std::numbers::pi_v<double>);
+    };
+
+    for (int i = 0; i < leadInSamples; ++i) {
+        samples.push_back(0);
+    }
+
+    for (int i = 0; i < bodySamples; ++i) {
         const double t = static_cast<double>(i) / kSampleRate;
+        const double transitionStart = std::max(0.0, kSpec.splitSeconds - (kSpec.blendSeconds * 0.5));
+        const double transitionEnd = std::min(kSpec.bodySeconds, kSpec.splitSeconds + (kSpec.blendSeconds * 0.5));
+
+        double mixSecond = 0.0;
+        if (t >= transitionEnd) {
+            mixSecond = 1.0;
+        } else if (t > transitionStart) {
+            mixSecond = easeInOut((t - transitionStart) / std::max(0.001, transitionEnd - transitionStart));
+        }
+        const double mixFirst = 1.0 - mixSecond;
+
         double envelope = 1.0;
-        if (t < kAttackSeconds) {
-            envelope = t / kAttackSeconds;
-        } else if (t > (kDurationSeconds - kReleaseSeconds)) {
-            envelope = (kDurationSeconds - t) / kReleaseSeconds;
+        if (i < attackSamples) {
+            envelope *= easeInOut(static_cast<double>(i) / static_cast<double>(attackSamples - 1));
         }
-        envelope = std::clamp(envelope, 0.0, 1.0);
-
-        double sample = 0.0;
-        if (t < kSplitSeconds) {
-            sample += 0.75 * std::sin(2.0 * kPi * 1046.50 * t);
-            sample += 0.20 * std::sin(2.0 * kPi * 1567.98 * t);
-        } else {
-            const double shifted = t - kSplitSeconds;
-            sample += 0.62 * std::sin(2.0 * kPi * 1318.51 * shifted);
-            sample += 0.16 * std::sin(2.0 * kPi * 1975.53 * shifted);
+        if (i >= (bodySamples - releaseSamples)) {
+            const int releaseIndex = bodySamples - 1 - i;
+            envelope *= easeInOut(static_cast<double>(releaseIndex) / static_cast<double>(releaseSamples - 1));
         }
 
-        const auto pcm = static_cast<std::int16_t>(std::clamp(sample * envelope * 0.28, -1.0, 1.0) * 32767.0);
+        const double firstTone =
+            kSpec.firstMix * std::sin(2.0 * kPi * kSpec.firstBaseHz * t) +
+            kSpec.firstHarmonicMix * std::sin(2.0 * kPi * kSpec.firstHarmonicHz * t);
+        const double secondTone =
+            kSpec.secondMix * std::sin(2.0 * kPi * kSpec.secondBaseHz * t) +
+            kSpec.secondHarmonicMix * std::sin(2.0 * kPi * kSpec.secondHarmonicHz * t);
+
+        const double sample = ((mixFirst * firstTone) + (mixSecond * secondTone)) * envelope * kSpec.outputGain;
+        const auto pcm = static_cast<std::int16_t>(std::clamp(sample, -1.0, 1.0) * 32767.0);
         samples.push_back(pcm);
+    }
+
+    for (int i = 0; i < tailSamples; ++i) {
+        samples.push_back(0);
     }
 
     std::vector<std::uint8_t> wav;
@@ -101,38 +203,80 @@ std::vector<std::uint8_t> CreateCaptureSoundWav() {
 }
 
 std::vector<std::uint8_t> CreateCaptureCompleteSoundWav() {
+    constexpr ChimeSpec kSpec{
+        .leadInSeconds = 0.010,
+        .bodySeconds = 0.094,
+        .tailSeconds = 0.018,
+        .splitSeconds = 0.041,
+        .blendSeconds = 0.010,
+        .attackSeconds = 0.008,
+        .releaseSeconds = 0.028,
+        .firstBaseHz = 783.99,
+        .firstHarmonicHz = 1174.66,
+        .secondBaseHz = 987.77,
+        .secondHarmonicHz = 1479.98,
+        .firstMix = 0.72,
+        .firstHarmonicMix = 0.16,
+        .secondMix = 0.58,
+        .secondHarmonicMix = 0.12,
+        .outputGain = 0.21,
+    };
     constexpr int kSampleRate = 22050;
-    constexpr double kDurationSeconds = 0.084;
-    constexpr double kSplitSeconds = 0.038;
-    constexpr double kAttackSeconds = 0.003;
-    constexpr double kReleaseSeconds = 0.024;
     constexpr double kPi = 3.14159265358979323846;
-    const int sampleCount = static_cast<int>(kSampleRate * kDurationSeconds);
+    const int leadInSamples = std::max(1, static_cast<int>(std::lround(kSampleRate * kSpec.leadInSeconds)));
+    const int bodySamples = std::max(1, static_cast<int>(std::lround(kSampleRate * kSpec.bodySeconds)));
+    const int tailSamples = std::max(1, static_cast<int>(std::lround(kSampleRate * kSpec.tailSeconds)));
+    const int attackSamples = std::max(2, static_cast<int>(std::lround(kSampleRate * kSpec.attackSeconds)));
+    const int releaseSamples = std::max(2, static_cast<int>(std::lround(kSampleRate * kSpec.releaseSeconds)));
+    const int totalSamples = leadInSamples + bodySamples + tailSamples;
 
     std::vector<std::int16_t> samples;
-    samples.reserve(static_cast<size_t>(sampleCount));
-    for (int i = 0; i < sampleCount; ++i) {
+    samples.reserve(static_cast<size_t>(totalSamples));
+    const auto easeInOut = [](double progress) {
+        progress = std::clamp(progress, 0.0, 1.0);
+        return 0.5 - 0.5 * std::cos(progress * std::numbers::pi_v<double>);
+    };
+
+    for (int i = 0; i < leadInSamples; ++i) {
+        samples.push_back(0);
+    }
+
+    for (int i = 0; i < bodySamples; ++i) {
         const double t = static_cast<double>(i) / kSampleRate;
+        const double transitionStart = std::max(0.0, kSpec.splitSeconds - (kSpec.blendSeconds * 0.5));
+        const double transitionEnd = std::min(kSpec.bodySeconds, kSpec.splitSeconds + (kSpec.blendSeconds * 0.5));
+
+        double mixSecond = 0.0;
+        if (t >= transitionEnd) {
+            mixSecond = 1.0;
+        } else if (t > transitionStart) {
+            mixSecond = easeInOut((t - transitionStart) / std::max(0.001, transitionEnd - transitionStart));
+        }
+        const double mixFirst = 1.0 - mixSecond;
+
         double envelope = 1.0;
-        if (t < kAttackSeconds) {
-            envelope = t / kAttackSeconds;
-        } else if (t > (kDurationSeconds - kReleaseSeconds)) {
-            envelope = (kDurationSeconds - t) / kReleaseSeconds;
+        if (i < attackSamples) {
+            envelope *= easeInOut(static_cast<double>(i) / static_cast<double>(attackSamples - 1));
         }
-        envelope = std::clamp(envelope, 0.0, 1.0);
-
-        double sample = 0.0;
-        if (t < kSplitSeconds) {
-            sample += 0.74 * std::sin(2.0 * kPi * 783.99 * t);
-            sample += 0.18 * std::sin(2.0 * kPi * 1174.66 * t);
-        } else {
-            const double shifted = t - kSplitSeconds;
-            sample += 0.60 * std::sin(2.0 * kPi * 987.77 * shifted);
-            sample += 0.14 * std::sin(2.0 * kPi * 1479.98 * shifted);
+        if (i >= (bodySamples - releaseSamples)) {
+            const int releaseIndex = bodySamples - 1 - i;
+            envelope *= easeInOut(static_cast<double>(releaseIndex) / static_cast<double>(releaseSamples - 1));
         }
 
-        const auto pcm = static_cast<std::int16_t>(std::clamp(sample * envelope * 0.22, -1.0, 1.0) * 32767.0);
+        const double firstTone =
+            kSpec.firstMix * std::sin(2.0 * kPi * kSpec.firstBaseHz * t) +
+            kSpec.firstHarmonicMix * std::sin(2.0 * kPi * kSpec.firstHarmonicHz * t);
+        const double secondTone =
+            kSpec.secondMix * std::sin(2.0 * kPi * kSpec.secondBaseHz * t) +
+            kSpec.secondHarmonicMix * std::sin(2.0 * kPi * kSpec.secondHarmonicHz * t);
+
+        const double sample = ((mixFirst * firstTone) + (mixSecond * secondTone)) * envelope * kSpec.outputGain;
+        const auto pcm = static_cast<std::int16_t>(std::clamp(sample, -1.0, 1.0) * 32767.0);
         samples.push_back(pcm);
+    }
+
+    for (int i = 0; i < tailSamples; ++i) {
+        samples.push_back(0);
     }
 
     std::vector<std::uint8_t> wav;
@@ -169,7 +313,7 @@ std::vector<std::uint8_t> CreateCaptureCompleteSoundWav() {
     return wav;
 }
 
-HICON CreateOneShotTrayIcon() {
+HICON CreateFrameSnapTrayIcon() {
     constexpr int fallbackSize = 32;
     const int width = std::max(GetSystemMetrics(SM_CXSMICON), fallbackSize);
     const int height = std::max(GetSystemMetrics(SM_CYSMICON), fallbackSize);
@@ -214,10 +358,11 @@ HICON CreateOneShotTrayIcon() {
 
 }  // namespace
 
-ScreenshotterApp::ScreenshotterApp(HINSTANCE instance)
-    : instance_(instance) {}
+FrameSnapApp::FrameSnapApp(HINSTANCE instance, bool launchBackground)
+    : instance_(instance),
+      launchBackground_(launchBackground) {}
 
-ScreenshotterApp::~ScreenshotterApp() {
+FrameSnapApp::~FrameSnapApp() {
     settingsStore_.Save(settings_);
     RemoveTrayIcon();
     if (trayIconHandle_ != nullptr) {
@@ -232,7 +377,7 @@ ScreenshotterApp::~ScreenshotterApp() {
     }
 }
 
-bool ScreenshotterApp::Initialize() {
+bool FrameSnapApp::Initialize() {
     AppendStartupLog(L"Initialize: begin");
     INITCOMMONCONTROLSEX icc{sizeof(icc), ICC_STANDARD_CLASSES | ICC_BAR_CLASSES};
     InitCommonControlsEx(&icc);
@@ -247,8 +392,17 @@ bool ScreenshotterApp::Initialize() {
 
     settings_ = settingsStore_.Load();
     AppendStartupLog(L"Initialize: settings loaded");
-    util::SetRunAtStartup(true);
+    AppendStartupLog(std::wstring(L"Initialize: launch_mode=") + (launchBackground_ ? L"background" : L"manual"));
+    if (settings_.printScreenOverrideEnabled) {
+        const bool overrideOk = util::SetPrintScreenSnippingEnabled(false);
+        AppendStartupLog(std::wstring(L"Initialize: print_screen_override_requested=1 result=") + (overrideOk ? L"ok" : L"failed"));
+    } else {
+        AppendStartupLog(std::wstring(L"Initialize: print_screen_override_requested=0 current_windows_snipping=") +
+            (util::IsPrintScreenSnippingEnabled() ? L"enabled" : L"disabled"));
+    }
+    util::SetRunAtStartup(settings_.runAtStartupEnabled, true);
     AppendStartupLog(L"Initialize: startup registration attempted");
+    taskbarCreatedMessage_ = RegisterWindowMessageW(L"TaskbarCreated");
 
     if (!CreateMainWindow()) {
         AppendStartupLog(L"Initialize: main window creation failed");
@@ -273,31 +427,38 @@ bool ScreenshotterApp::Initialize() {
     if (!hotkeyRegistered_) {
         AppendStartupLog(L"Initialize: hotkey registration failed for " + util::HotkeyLabel(settings_.hotkey));
     } else {
-        AppendStartupLog(L"Initialize: hotkey registered");
+        AppendStartupLog(std::wstring(L"Initialize: hotkey registered via ") + (usingKeyboardHook_ ? L"hook" : L"registerhotkey"));
     }
     CreateTrayIcon();
     AppendStartupLog(L"Initialize: tray icon created");
+    if (settingsWindow_ != nullptr) {
+        settingsWindow_->Show(settings_, BuildHotkeyStatusText(), BuildPrintScreenStatusText(),
+            launchBackground_ ? SW_SHOWMINNOACTIVE : SW_SHOWNORMAL);
+    }
     if (!hotkeyRegistered_) {
-        settingsWindow_->Show(settings_);
-        const std::wstring message = L"OneShot couldn't register " + util::HotkeyLabel(settings_.hotkey) +
+        settingsWindow_->Show(settings_, BuildHotkeyStatusText(), BuildPrintScreenStatusText(), SW_SHOWNORMAL);
+        const std::wstring message = L"FrameSnap couldn't register " + util::HotkeyLabel(settings_.hotkey) +
                                      L" because Windows or another app is already using it.\n\nRecord a different shortcut in Settings.";
         MessageBoxW(hwnd_, message.c_str(), kAppName, MB_OK | MB_ICONINFORMATION);
     }
     return true;
 }
 
-int ScreenshotterApp::Run() {
+int FrameSnapApp::Run() {
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0)) {
+        if (editor_ != nullptr && editor_->HandleAccelerator(message)) {
+            continue;
+        }
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
     return static_cast<int>(message.wParam);
 }
 
-bool ScreenshotterApp::CreateMainWindow() {
+bool FrameSnapApp::CreateMainWindow() {
     WNDCLASSW wc{};
-    wc.lpfnWndProc = ScreenshotterApp::WndProc;
+    wc.lpfnWndProc = FrameSnapApp::WndProc;
     wc.hInstance = instance_;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpszClassName = kMainClassName;
@@ -327,28 +488,35 @@ bool ScreenshotterApp::CreateMainWindow() {
     return hwnd_ != nullptr;
 }
 
-void ScreenshotterApp::CreateTrayIcon() {
+void FrameSnapApp::CreateTrayIcon() {
+    if (hwnd_ == nullptr) {
+        return;
+    }
     trayIcon_.cbSize = sizeof(trayIcon_);
     trayIcon_.hWnd = hwnd_;
     trayIcon_.uID = 1;
-    trayIcon_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    trayIcon_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
     trayIcon_.uCallbackMessage = kTrayMessage;
     if (trayIconHandle_ == nullptr) {
-        trayIconHandle_ = CreateOneShotTrayIcon();
+        trayIconHandle_ = CreateFrameSnapTrayIcon();
     }
     trayIcon_.hIcon = trayIconHandle_ != nullptr ? trayIconHandle_ : LoadIconW(nullptr, IDI_APPLICATION);
     wcscpy_s(trayIcon_.szTip, kAppName);
-    Shell_NotifyIconW(NIM_ADD, &trayIcon_);
+    Shell_NotifyIconW(NIM_DELETE, &trayIcon_);
+    if (Shell_NotifyIconW(NIM_ADD, &trayIcon_)) {
+        trayIcon_.uVersion = NOTIFYICON_VERSION_4;
+        Shell_NotifyIconW(NIM_SETVERSION, &trayIcon_);
+    }
 }
 
-void ScreenshotterApp::RemoveTrayIcon() {
+void FrameSnapApp::RemoveTrayIcon() {
     if (trayIcon_.hWnd != nullptr) {
         Shell_NotifyIconW(NIM_DELETE, &trayIcon_);
         trayIcon_.hWnd = nullptr;
     }
 }
 
-void ScreenshotterApp::ShowTrayMenu() {
+void FrameSnapApp::ShowTrayMenu() {
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, TrayCapture, L"Capture");
     AppendMenuW(menu, MF_STRING, TraySettings, L"Settings");
@@ -363,24 +531,133 @@ void ScreenshotterApp::ShowTrayMenu() {
     DestroyMenu(menu);
 }
 
-bool ScreenshotterApp::RegisterAppHotkey(const HotkeyBinding& binding) {
+bool FrameSnapApp::RegisterAppHotkey(const HotkeyBinding& binding) {
     UnregisterAppHotkey();
-    return RegisterHotKey(hwnd_, kHotkeyId, binding.modifiers | MOD_NOREPEAT, binding.virtualKey) == TRUE;
+    const UINT modifiers = binding.modifiers & (MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN);
+    if (binding.virtualKey != 0U &&
+        RegisterHotKey(hwnd_, kHotkeyId, modifiers | MOD_NOREPEAT, binding.virtualKey) == TRUE) {
+        usingKeyboardHook_ = false;
+        return true;
+    }
+
+    const bool allowHookFallback = binding.virtualKey == VK_SNAPSHOT || modifiers == 0U;
+    if (!allowHookFallback) {
+        return false;
+    }
+    return RegisterKeyboardHook({modifiers, binding.virtualKey});
 }
 
-void ScreenshotterApp::UnregisterAppHotkey() {
+bool FrameSnapApp::RegisterKeyboardHook(const HotkeyBinding& binding) {
+    hookedBinding_ = binding;
+    hookKeyDown_ = false;
+    gHookTarget = this;
+    keyboardHook_ = SetWindowsHookExW(WH_KEYBOARD_LL, FrameSnapApp::LowLevelKeyboardProc, instance_, 0);
+    if (keyboardHook_ == nullptr) {
+        if (gHookTarget == this) {
+            gHookTarget = nullptr;
+        }
+        usingKeyboardHook_ = false;
+        return false;
+    }
+    usingKeyboardHook_ = true;
+    return true;
+}
+
+void FrameSnapApp::UnregisterAppHotkey() {
     UnregisterHotKey(hwnd_, kHotkeyId);
+    UnregisterKeyboardHook();
 }
 
-void ScreenshotterApp::BeginCapture() {
+void FrameSnapApp::UnregisterKeyboardHook() {
+    if (keyboardHook_ != nullptr) {
+        UnhookWindowsHookEx(keyboardHook_);
+        keyboardHook_ = nullptr;
+    }
+    if (gHookTarget == this) {
+        gHookTarget = nullptr;
+    }
+    usingKeyboardHook_ = false;
+    hookKeyDown_ = false;
+}
+
+std::wstring FrameSnapApp::BuildHotkeyStatusText() const {
+    const std::wstring label = util::HotkeyLabel(settings_.hotkey);
+    if (hotkeyRegistered_) {
+        if (usingKeyboardHook_) {
+            return L"Status: ready through low-level hook for " + label;
+        }
+        return L"Status: ready through RegisterHotKey for " + label;
+    }
+    return L"Status: conflict or unsupported key for " + label;
+}
+
+std::wstring FrameSnapApp::BuildPrintScreenStatusText() const {
+    const bool windowsSnippingEnabled = util::IsPrintScreenSnippingEnabled();
+    if (settings_.printScreenOverrideEnabled) {
+        return windowsSnippingEnabled
+            ? L"Windows Print Screen snipping is still enabled. FrameSnap may need a restart or manual system toggle."
+            : L"Windows Print Screen snipping is disabled. FrameSnap can own Print Screen-style keys.";
+    }
+    return windowsSnippingEnabled
+        ? L"Windows Print Screen snipping is enabled."
+        : L"Windows Print Screen snipping is disabled outside FrameSnap.";
+}
+
+void FrameSnapApp::ExitApplication() {
+    if (settingsWindow_ != nullptr && settingsWindow_->Handle() != nullptr) {
+        DestroyWindow(settingsWindow_->Handle());
+    }
+    DestroyWindow(hwnd_);
+}
+
+bool FrameSnapApp::HandleLowLevelKeyboard(WPARAM wParam, const KBDLLHOOKSTRUCT& info) {
+    if ((info.flags & LLKHF_INJECTED) != 0 || hookedBinding_.virtualKey == 0U) {
+        return false;
+    }
+
+    const UINT virtualKey = static_cast<UINT>(info.vkCode);
+    const bool keyDown = wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN;
+    const bool keyUp = wParam == WM_KEYUP || wParam == WM_SYSKEYUP;
+    if (!keyDown && !keyUp) {
+        return false;
+    }
+
+    if (virtualKey == hookedBinding_.virtualKey && keyUp) {
+        hookKeyDown_ = false;
+        return true;
+    }
+
+    if (!keyDown || virtualKey != hookedBinding_.virtualKey || hookKeyDown_ || IsModifierKey(virtualKey)) {
+        return false;
+    }
+
+    const UINT activeModifiers = CurrentModifierFlags(virtualKey) & (MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN);
+    const UINT expectedModifiers = hookedBinding_.modifiers & (MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN);
+    if (activeModifiers != expectedModifiers) {
+        return false;
+    }
+
+    hookKeyDown_ = true;
+    PostMessageW(hwnd_, WM_HOTKEY, kHotkeyId, 0);
+    return true;
+}
+
+void FrameSnapApp::BeginCapture() {
     if (overlay_ == nullptr || overlay_->IsActive()) {
         return;
     }
+    if (preview_ != nullptr) {
+        preview_->Hide();
+    }
+    if (editor_ != nullptr && editor_->Handle() != nullptr) {
+        ShowWindow(editor_->Handle(), SW_HIDE);
+    }
+    DwmFlush();
     const auto hotkeyStart = std::chrono::steady_clock::now();
     if (settings_.soundEnabled) {
         static const auto captureSound = CreateCaptureSoundWav();
         if (!captureSound.empty()) {
-            PlaySoundW(reinterpret_cast<LPCWSTR>(captureSound.data()), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT | SND_NOSTOP);
+            PlaySoundW(reinterpret_cast<LPCWSTR>(captureSound.data()), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
         }
     }
     frozenFrame_ = util::CaptureScreenSnapshotGdi(util::VirtualScreenBounds());
@@ -391,7 +668,7 @@ void ScreenshotterApp::BeginCapture() {
     lastOverlayLatency_ = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - hotkeyStart);
 }
 
-void ScreenshotterApp::HandleCaptureReady(std::unique_ptr<CaptureRequest> request) {
+void FrameSnapApp::HandleCaptureReady(std::unique_ptr<CaptureRequest> request) {
     auto result = frozenFrame_ != nullptr ? util::CropImage(frozenFrame_, request->selection) : captureEngine_.Capture(request->selection);
     frozenFrame_.reset();
     if (result == nullptr) {
@@ -425,36 +702,71 @@ void ScreenshotterApp::HandleCaptureReady(std::unique_ptr<CaptureRequest> reques
     util::WriteMetricsLog(metrics, *result);
 }
 
-void ScreenshotterApp::ApplySettings(const AppSettings& settings) {
+void FrameSnapApp::ApplySettings(const AppSettings& settings) {
     AppSettings merged = settings;
     merged.penColor = settings_.penColor;
     merged.highlighterColor = settings_.highlighterColor;
     merged.penWidth = settings_.penWidth;
     merged.highlighterWidth = settings_.highlighterWidth;
+    if (!util::SetPrintScreenSnippingEnabled(!merged.printScreenOverrideEnabled)) {
+        MessageBoxW(hwnd_,
+            L"FrameSnap couldn't update the Windows Print Screen override setting.",
+            kAppName,
+            MB_OK | MB_ICONWARNING);
+        if (settingsWindow_ != nullptr) {
+            settingsWindow_->UpdateStatus(BuildHotkeyStatusText(), BuildPrintScreenStatusText());
+        }
+        return;
+    }
     if (!RegisterAppHotkey(merged.hotkey)) {
         hotkeyRegistered_ = RegisterAppHotkey(settings_.hotkey);
-        const std::wstring message = L"OneShot couldn't register " + util::HotkeyLabel(merged.hotkey) +
+        const std::wstring message = L"FrameSnap couldn't register " + util::HotkeyLabel(merged.hotkey) +
                                      L". It is likely already in use or unsupported.";
         MessageBoxW(hwnd_, message.c_str(), kAppName, MB_OK | MB_ICONWARNING);
+        if (settingsWindow_ != nullptr) {
+            settingsWindow_->UpdateStatus(BuildHotkeyStatusText(), BuildPrintScreenStatusText());
+        }
         return;
     }
     hotkeyRegistered_ = true;
     settings_ = merged;
+    util::SetRunAtStartup(settings_.runAtStartupEnabled, true);
     settingsStore_.Save(settings_);
+    AppendStartupLog(std::wstring(L"ApplySettings: hotkey_mode=") + (usingKeyboardHook_ ? L"hook" : L"registerhotkey") +
+        L" print_screen_override=" + (settings_.printScreenOverrideEnabled ? L"1" : L"0"));
+    if (settingsWindow_ != nullptr) {
+        settingsWindow_->UpdateStatus(BuildHotkeyStatusText(), BuildPrintScreenStatusText());
+    }
 }
 
-LRESULT CALLBACK ScreenshotterApp::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
-    auto* self = reinterpret_cast<ScreenshotterApp*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+LRESULT CALLBACK FrameSnapApp::LowLevelKeyboardProc(int code, WPARAM wParam, LPARAM lParam) {
+    if (code < 0 || gHookTarget == nullptr) {
+        return CallNextHookEx(nullptr, code, wParam, lParam);
+    }
+    const auto* info = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
+    if (info != nullptr && gHookTarget->HandleLowLevelKeyboard(wParam, *info)) {
+        return 1;
+    }
+    return CallNextHookEx(gHookTarget->keyboardHook_, code, wParam, lParam);
+}
+
+LRESULT CALLBACK FrameSnapApp::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    auto* self = reinterpret_cast<FrameSnapApp*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
         const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
-        self = static_cast<ScreenshotterApp*>(create->lpCreateParams);
+        self = static_cast<FrameSnapApp*>(create->lpCreateParams);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
         return TRUE;
     }
     return self != nullptr ? self->HandleMessage(message, wParam, lParam) : DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
-LRESULT ScreenshotterApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
+LRESULT FrameSnapApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
+    if (taskbarCreatedMessage_ != 0 && message == taskbarCreatedMessage_) {
+        CreateTrayIcon();
+        return 0;
+    }
+
     switch (message) {
     case WM_HOTKEY:
         BeginCapture();
@@ -465,13 +777,13 @@ LRESULT ScreenshotterApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lPar
             BeginCapture();
             return 0;
         case TraySettings:
-            settingsWindow_->Show(settings_);
+            settingsWindow_->Show(settings_, BuildHotkeyStatusText(), BuildPrintScreenStatusText(), SW_SHOWNORMAL);
             return 0;
         case TrayOpenFolder:
             ShellExecuteW(hwnd_, L"open", settings_.saveFolder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             return 0;
         case TrayExit:
-            DestroyWindow(hwnd_);
+            ExitApplication();
             return 0;
         default:
             break;
@@ -485,6 +797,9 @@ LRESULT ScreenshotterApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lPar
         HandleCaptureReady(std::move(request));
         return 0;
     }
+    case WM_APP_CAPTURE_CANCELLED:
+        frozenFrame_.reset();
+        return 0;
     case WM_APP_PREVIEW_CLICKED:
         if (const auto image = preview_->CurrentImage()) {
             editor_->Show(image, settings_);
@@ -495,6 +810,9 @@ LRESULT ScreenshotterApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lPar
         ApplySettings(*settings);
         return 0;
     }
+    case WM_APP_EXIT_REQUESTED:
+        ExitApplication();
+        return 0;
     case kTrayMessage:
         if (lParam == WM_CONTEXTMENU || lParam == WM_RBUTTONUP) {
             ShowTrayMenu();

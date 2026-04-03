@@ -10,7 +10,7 @@ $outputPath = Join-Path $root $OutputDir
 New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
 
 $vsDevCmd = "C:\BuildTools\Common7\Tools\VsDevCmd.bat"
-$outputExe = Join-Path $outputPath "OneShot.exe"
+$outputExe = Join-Path $outputPath "FrameSnap.exe"
 
 $command = @(
     "call `"$vsDevCmd`" -arch=x64",

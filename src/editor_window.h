@@ -11,6 +11,8 @@ public:
     ~EditorWindow();
 
     void Show(const std::shared_ptr<ImageData>& image, AppSettings& settings);
+    bool HandleAccelerator(const MSG& message);
+    HWND Handle() const;
 
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -39,13 +41,17 @@ private:
     void EraseStrokeAt(FloatPoint point);
     void PickColorAt(FloatPoint point);
     void UpdateToolbarState();
-    void UpdateWidthsFromSlider();
+    void UpdateWidthFromScaledValue(int scaledValue);
     void SaveImage();
     void ClearMarkupLayer();
     void RebuildMarkupLayer();
     void RasterizeStroke(ImageData& target, const Stroke& stroke) const;
     float StrokeScaleFactor() const;
     float EffectiveStrokeWidth(const Stroke& stroke) const;
+    float PreviewStrokeDiameter(float width) const;
+    RECT BrushPreviewRect(POINT point, float width) const;
+    void UpdateBrushPreview(POINT point, float width);
+    void HideBrushPreview();
     RECT StrokeDirtyRect(const Stroke& stroke, size_t startIndex = 0) const;
     bool CopyImageToClipboard(const ImageData& image) const;
     void CopyToClipboardAndClose();
@@ -62,9 +68,6 @@ private:
     HWND undoButton_{};
     HWND redoButton_{};
     HWND saveButton_{};
-    HWND minimizeButton_{};
-    HWND maximizeButton_{};
-    HWND closeButton_{};
     HWND widthSlider_{};
     std::unique_ptr<ColorPickerControl> colorPicker_;
     std::shared_ptr<ImageData> image_;
@@ -79,7 +82,12 @@ private:
     HFONT uiFont_{};
     HFONT titleFont_{};
     HFONT hintFont_{};
+    HFONT iconFont_{};
     HICON smallIcon_{};
     HICON largeIcon_{};
     ImageData markupImage_{};
+    bool sizing_{false};
+    bool brushPreviewVisible_{false};
+    POINT brushPreviewPoint_{};
+    float brushPreviewWidth_{3.0f};
 };

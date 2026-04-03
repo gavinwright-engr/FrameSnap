@@ -11,23 +11,30 @@
 #include "settings_window.h"
 #include "types.h"
 
-class ScreenshotterApp {
+class FrameSnapApp {
 public:
-    explicit ScreenshotterApp(HINSTANCE instance);
-    ~ScreenshotterApp();
+    FrameSnapApp(HINSTANCE instance, bool launchBackground);
+    ~FrameSnapApp();
 
     bool Initialize();
     int Run();
 
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
     bool CreateMainWindow();
     void CreateTrayIcon();
     void RemoveTrayIcon();
     void ShowTrayMenu();
     bool RegisterAppHotkey(const HotkeyBinding& binding);
+    bool RegisterKeyboardHook(const HotkeyBinding& binding);
     void UnregisterAppHotkey();
+    void UnregisterKeyboardHook();
+    bool HandleLowLevelKeyboard(WPARAM wParam, const KBDLLHOOKSTRUCT& info);
+    std::wstring BuildHotkeyStatusText() const;
+    std::wstring BuildPrintScreenStatusText() const;
+    void ExitApplication();
     void BeginCapture();
     void HandleCaptureReady(std::unique_ptr<CaptureRequest> request);
     void ApplySettings(const AppSettings& settings);
@@ -45,8 +52,14 @@ private:
     std::unique_ptr<SettingsWindow> settingsWindow_;
     NOTIFYICONDATAW trayIcon_{};
     HICON trayIconHandle_{};
+    HHOOK keyboardHook_{};
     ULONG_PTR gdiplusToken_{};
     std::shared_ptr<ImageData> frozenFrame_;
     std::chrono::microseconds lastOverlayLatency_{};
+    HotkeyBinding hookedBinding_{};
+    UINT taskbarCreatedMessage_{};
+    bool usingKeyboardHook_{false};
+    bool hookKeyDown_{false};
     bool hotkeyRegistered_{false};
+    bool launchBackground_{false};
 };

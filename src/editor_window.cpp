@@ -3,34 +3,33 @@
 #include "util.h"
 
 #include <limits>
+#include <numeric>
 
 namespace {
 
-constexpr wchar_t kEditorClassName[] = L"OneShotEditorWindow";
-constexpr int kTitleStripHeight = 46;
-constexpr int kToolbarHeight = 154;
-constexpr int kSidebarWidth = 320;
-constexpr int kOuterPadding = 20;
-constexpr int kButtonHeight = 44;
+constexpr wchar_t kEditorClassName[] = L"FrameSnapEditorWindow";
+constexpr int kTitleStripHeight = 0;
+constexpr int kToolbarHeight = 84;
+constexpr int kSidebarWidth = 288;
+constexpr int kOuterPadding = 18;
+constexpr int kButtonHeight = 42;
 constexpr int kButtonGap = 8;
-constexpr int kWindowButtonWidth = 42;
-constexpr int kWindowButtonHeight = 30;
 constexpr int kSliderLabelWidth = 88;
 constexpr int kSliderValueWidth = 84;
-constexpr COLORREF kWindowColor = RGB(242, 246, 251);
-constexpr COLORREF kHeaderColor = RGB(250, 252, 255);
-constexpr COLORREF kToolbarColor = RGB(248, 250, 253);
-constexpr COLORREF kSidebarColor = RGB(244, 247, 252);
-constexpr COLORREF kCanvasColor = RGB(236, 241, 248);
-constexpr COLORREF kCanvasStripeColor = RGB(228, 234, 243);
-constexpr COLORREF kCanvasFrameColor = RGB(205, 214, 226);
-constexpr COLORREF kCardColor = RGB(255, 255, 255);
-constexpr COLORREF kAccentColor = RGB(29, 78, 216);
-constexpr COLORREF kAccentPressedColor = RGB(21, 66, 190);
-constexpr COLORREF kBorderColor = RGB(214, 223, 234);
-constexpr COLORREF kTitleColor = RGB(15, 23, 42);
-constexpr COLORREF kBodyColor = RGB(59, 72, 89);
-constexpr COLORREF kMutedColor = RGB(100, 116, 139);
+constexpr COLORREF kWindowColor = RGB(10, 14, 20);
+constexpr COLORREF kHeaderColor = RGB(14, 19, 26);
+constexpr COLORREF kToolbarColor = RGB(14, 19, 26);
+constexpr COLORREF kSidebarColor = RGB(12, 17, 24);
+constexpr COLORREF kCanvasColor = RGB(17, 23, 31);
+constexpr COLORREF kCanvasStripeColor = RGB(24, 31, 42);
+constexpr COLORREF kCanvasFrameColor = RGB(40, 50, 64);
+constexpr COLORREF kCardColor = RGB(20, 27, 36);
+constexpr COLORREF kAccentColor = RGB(59, 130, 246);
+constexpr COLORREF kAccentPressedColor = RGB(37, 99, 235);
+constexpr COLORREF kBorderColor = RGB(43, 55, 72);
+constexpr COLORREF kTitleColor = RGB(232, 238, 247);
+constexpr COLORREF kBodyColor = RGB(194, 203, 217);
+constexpr COLORREF kMutedColor = RGB(135, 148, 166);
 constexpr FloatPoint kStrokeBreakPoint{-1.0f, -1.0f};
 
 enum ControlId {
@@ -42,15 +41,29 @@ enum ControlId {
     ControlUndo,
     ControlRedo,
     ControlSave,
-    ControlMinimize,
-    ControlMaximize,
-    ControlClose,
     ControlWidth,
     ControlColor,
 };
 
+constexpr wchar_t kBrushSizeClassName[] = L"FrameSnapBrushSizeControl";
+constexpr UINT WM_EDITOR_BRUSH_SET_VALUE = WM_APP + 60;
+constexpr UINT WM_EDITOR_BRUSH_GET_VALUE = WM_APP + 61;
+constexpr UINT WM_EDITOR_BRUSH_CHANGED = WM_APP + 62;
+constexpr UINT WM_EDITOR_BRUSH_DRAG_END = WM_APP + 63;
+
+struct BrushSizeControlState {
+    HWND parent{};
+    int minValue{20};
+    int maxValue{960};
+    int value{60};
+    bool dragging{};
+    POINT anchorScreen{};
+    POINT previewAnchorClient{};
+    int anchorValue{60};
+};
+
 std::wstring BuildEditorTitle(const ImageData& image) {
-    std::wstring title = L"OneShot Editor - ";
+    std::wstring title = L"FrameSnap Editor - ";
     title += util::FormatRectSize(image.width, image.height);
     if (image.hdrSource) {
         title += L" - HDR source";
@@ -66,6 +79,10 @@ std::wstring FormatBrushWidthLabel(float width) {
         swprintf_s(buffer, L"%.1f px", width);
     }
     return buffer;
+}
+
+std::wstring FormatBrushScaledValue(int scaledValue) {
+    return FormatBrushWidthLabel(static_cast<float>(scaledValue) / 20.0f);
 }
 
 RECT RectWithSize(LONG left, LONG top, LONG width, LONG height) {
@@ -106,6 +123,236 @@ std::wstring ReadWindowText(HWND control) {
 
 Gdiplus::Color ToGdiColor(COLORREF color, BYTE alpha = 255) {
     return Gdiplus::Color(alpha, GetRValue(color), GetGValue(color), GetBValue(color));
+}
+
+HFONT CreateIconFont(int height) {
+    HFONT font = CreateFontW(
+        -height,
+        0,
+        0,
+        0,
+        FW_NORMAL,
+        FALSE,
+        FALSE,
+        FALSE,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        DEFAULT_PITCH,
+        L"Segoe Fluent Icons");
+    if (font == nullptr) {
+        font = CreateFontW(
+            -height,
+            0,
+            0,
+            0,
+            FW_NORMAL,
+            FALSE,
+            FALSE,
+            FALSE,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            DEFAULT_PITCH,
+            L"Segoe MDL2 Assets");
+    }
+    return font;
+}
+
+const wchar_t* ButtonGlyph(UINT controlId) {
+    switch (controlId) {
+    case ControlPen:
+        return L"\uED63";
+    case ControlHighlighter:
+        return L"\uE7E6";
+    case ControlErase:
+        return L"\uED60";
+    case ControlEraseBrush:
+        return L"\uED61";
+    case ControlEyedropper:
+        return L"\uEF3C";
+    case ControlUndo:
+        return L"\uE7A7";
+    case ControlRedo:
+        return L"\uE7A6";
+    case ControlSave:
+        return L"\uEA35";
+    default:
+        return L"";
+    }
+}
+
+void NotifyBrushControlOwner(const BrushSizeControlState& state, HWND hwnd, UINT message) {
+    POINT previewPoint = state.previewAnchorClient;
+    if (!state.dragging) {
+        GetCursorPos(&previewPoint);
+        ScreenToClient(state.parent, &previewPoint);
+    }
+    SendMessageW(state.parent, message, static_cast<WPARAM>(state.value), MAKELPARAM(previewPoint.x, previewPoint.y));
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+LRESULT CALLBACK BrushSizeWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    auto* state = reinterpret_cast<BrushSizeControlState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (message == WM_NCCREATE) {
+        const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+        auto* parent = static_cast<HWND>(create->hwndParent);
+        auto* controlState = new BrushSizeControlState{};
+        controlState->parent = parent;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(controlState));
+        return TRUE;
+    }
+
+    switch (message) {
+    case WM_NCDESTROY:
+        delete state;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_SETCURSOR:
+        SetCursor(LoadCursorW(nullptr, state != nullptr && state->dragging ? IDC_SIZEALL : IDC_HAND));
+        return TRUE;
+    case WM_LBUTTONDOWN:
+        if (state != nullptr) {
+            SetFocus(hwnd);
+            SetCapture(hwnd);
+            state->dragging = true;
+            GetCursorPos(&state->anchorScreen);
+            state->previewAnchorClient = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            MapWindowPoints(hwnd, state->parent, &state->previewAnchorClient, 1);
+            state->anchorValue = state->value;
+            NotifyBrushControlOwner(*state, hwnd, WM_EDITOR_BRUSH_CHANGED);
+        }
+        return 0;
+    case WM_MOUSEMOVE:
+        if (state != nullptr && state->dragging) {
+            POINT cursor{};
+            GetCursorPos(&cursor);
+            const int dx = cursor.x - state->anchorScreen.x;
+            const int dy = state->anchorScreen.y - cursor.y;
+            const int dominantDelta = std::abs(dx) >= std::abs(dy) ? dx : dy;
+            const int delta = static_cast<int>(std::lround(dominantDelta * 0.65));
+            const int nextValue = std::clamp(state->anchorValue + delta, state->minValue, state->maxValue);
+            if (nextValue != state->value) {
+                state->value = nextValue;
+            }
+            NotifyBrushControlOwner(*state, hwnd, WM_EDITOR_BRUSH_CHANGED);
+        }
+        return 0;
+    case WM_MOUSEWHEEL:
+        if (state != nullptr) {
+            const int wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+            const int notches = wheelDelta / WHEEL_DELTA;
+            if (notches != 0) {
+                state->value = std::clamp(state->value + (notches * 10), state->minValue, state->maxValue);
+                NotifyBrushControlOwner(*state, hwnd, WM_EDITOR_BRUSH_CHANGED);
+            }
+        }
+        return 0;
+    case WM_KEYDOWN:
+        if (state != nullptr) {
+            int step = 0;
+            if (wParam == VK_LEFT || wParam == VK_DOWN) {
+                step = -10;
+            } else if (wParam == VK_RIGHT || wParam == VK_UP) {
+                step = 10;
+            }
+            if (step != 0) {
+                state->value = std::clamp(state->value + step, state->minValue, state->maxValue);
+                NotifyBrushControlOwner(*state, hwnd, WM_EDITOR_BRUSH_CHANGED);
+                return 0;
+            }
+        }
+        break;
+    case WM_LBUTTONUP:
+        if (state != nullptr && state->dragging) {
+            state->dragging = false;
+            ReleaseCapture();
+            NotifyBrushControlOwner(*state, hwnd, WM_EDITOR_BRUSH_DRAG_END);
+        }
+        return 0;
+    case WM_CAPTURECHANGED:
+        if (state != nullptr && state->dragging) {
+            state->dragging = false;
+            NotifyBrushControlOwner(*state, hwnd, WM_EDITOR_BRUSH_DRAG_END);
+        }
+        return 0;
+    case WM_EDITOR_BRUSH_SET_VALUE:
+        if (state != nullptr) {
+            state->value = std::clamp(static_cast<int>(wParam), state->minValue, state->maxValue);
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+    case WM_EDITOR_BRUSH_GET_VALUE:
+        return state != nullptr ? static_cast<LRESULT>(state->value) : 60;
+    case WM_PAINT:
+        if (state != nullptr) {
+            PAINTSTRUCT ps{};
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT client{};
+            GetClientRect(hwnd, &client);
+
+            const int width = std::max(1L, ps.rcPaint.right - ps.rcPaint.left);
+            const int height = std::max(1L, ps.rcPaint.bottom - ps.rcPaint.top);
+            HDC backDc = CreateCompatibleDC(hdc);
+            HBITMAP backBitmap = CreateCompatibleBitmap(hdc, width, height);
+            HGDIOBJ oldBitmap = SelectObject(backDc, backBitmap);
+            SetViewportOrgEx(backDc, -ps.rcPaint.left, -ps.rcPaint.top, nullptr);
+
+            const COLORREF fill = state->dragging ? RGB(30, 58, 138) : RGB(20, 27, 36);
+            const COLORREF border = state->dragging ? RGB(96, 165, 250) : RGB(52, 64, 82);
+            HBRUSH fillBrush = CreateSolidBrush(fill);
+            HPEN borderPen = CreatePen(PS_SOLID, 1, border);
+            HGDIOBJ oldBrush = SelectObject(backDc, fillBrush);
+            HGDIOBJ oldPen = SelectObject(backDc, borderPen);
+            RoundRect(backDc, client.left, client.top, client.right, client.bottom, 16, 16);
+            SelectObject(backDc, oldBrush);
+            SelectObject(backDc, oldPen);
+            DeleteObject(fillBrush);
+            DeleteObject(borderPen);
+
+            Gdiplus::Graphics graphics(backDc);
+            graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+            graphics.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+
+            const float brushWidth = static_cast<float>(state->value) / 20.0f;
+            const float previewDiameter = std::clamp(brushWidth * 1.35f, 8.0f, 18.0f);
+            const float previewX = 10.0f;
+            const float previewY = ((client.bottom - client.top) - previewDiameter) * 0.5f + 4.0f;
+
+            Gdiplus::SolidBrush previewFill(ToGdiColor(RGB(191, 219, 254), 155));
+            Gdiplus::Pen previewPen(ToGdiColor(RGB(147, 197, 253)), 1.6f);
+            graphics.FillEllipse(&previewFill, previewX, previewY, previewDiameter, previewDiameter);
+            graphics.DrawEllipse(&previewPen, previewX, previewY, previewDiameter, previewDiameter);
+
+            SetBkMode(backDc, TRANSPARENT);
+            SelectObject(backDc, GetStockObject(DEFAULT_GUI_FONT));
+            SetTextColor(backDc, RGB(148, 163, 184));
+            RECT labelRect{28, 5, client.right - 6, 19};
+            DrawTextW(backDc, L"Brush", -1, &labelRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            SetTextColor(backDc, state->dragging ? RGB(239, 246, 255) : RGB(232, 238, 247));
+            RECT valueRect{28, 18, client.right - 8, client.bottom - 6};
+            const std::wstring valueLabel = FormatBrushScaledValue(state->value);
+            DrawTextW(backDc, valueLabel.c_str(), -1, &valueRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+            SetViewportOrgEx(backDc, 0, 0, nullptr);
+            BitBlt(hdc, ps.rcPaint.left, ps.rcPaint.top, width, height, backDc, 0, 0, SRCCOPY);
+            SelectObject(backDc, oldBitmap);
+            DeleteObject(backBitmap);
+            DeleteDC(backDc);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        break;
+    default:
+        break;
+    }
+
+    return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
 ActiveTool ResolveWidthTool(ActiveTool activeTool, ActiveTool inkTool) {
@@ -290,7 +537,7 @@ HGLOBAL CreateDibV5(const ImageData& image) {
 }
 
 void DrawButtonGlyph(Gdiplus::Graphics& graphics, UINT controlId, const Gdiplus::RectF& rect, COLORREF color) {
-    Gdiplus::Pen pen(ToGdiColor(color), 2.15f);
+    Gdiplus::Pen pen(ToGdiColor(color), 2.3f);
     pen.SetStartCap(Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapRound);
     pen.SetLineJoin(Gdiplus::LineJoinRound);
@@ -299,45 +546,59 @@ void DrawButtonGlyph(Gdiplus::Graphics& graphics, UINT controlId, const Gdiplus:
 
     switch (controlId) {
     case ControlPen: {
-        graphics.DrawLine(&pen, rect.X + 3.0f, rect.Y + rect.Height - 4.0f, rect.X + rect.Width - 5.0f, rect.Y + 5.0f);
+        graphics.DrawLine(&pen, rect.X + 4.0f, rect.Y + rect.Height - 5.0f, rect.X + rect.Width - 7.0f, rect.Y + 5.5f);
         Gdiplus::PointF nib[]{
-            {rect.X + rect.Width - 6.0f, rect.Y + 5.0f},
-            {rect.X + rect.Width - 1.0f, rect.Y + 8.5f},
-            {rect.X + rect.Width - 7.5f, rect.Y + 12.5f},
+            {rect.X + rect.Width - 7.0f, rect.Y + 5.5f},
+            {rect.X + rect.Width - 2.0f, rect.Y + 8.5f},
+            {rect.X + rect.Width - 8.0f, rect.Y + 13.5f},
         };
         graphics.FillPolygon(&brush, nib, 3);
+        graphics.DrawLine(&pen, rect.X + 2.5f, rect.Y + rect.Height - 2.0f, rect.X + 7.5f, rect.Y + rect.Height - 6.0f);
         break;
     }
     case ControlHighlighter: {
-        Gdiplus::RectF body(rect.X + 3.5f, rect.Y + 5.5f, rect.Width - 7.0f, rect.Height - 11.0f);
-        graphics.FillRectangle(&softBrush, body);
-        graphics.DrawRectangle(&pen, body);
-        graphics.DrawLine(&pen, body.X + 4.0f, body.Y + body.Height - 3.0f, body.GetRight() - 4.0f, body.Y + 4.0f);
-        graphics.FillRectangle(&brush, body.X + 3.0f, body.GetBottom() - 4.0f, body.Width - 6.0f, 3.0f);
+        Gdiplus::PointF body[]{
+            {rect.X + 5.0f, rect.Y + rect.Height - 4.0f},
+            {rect.X + 10.0f, rect.Y + rect.Height - 8.0f},
+            {rect.X + rect.Width - 5.0f, rect.Y + 7.0f},
+            {rect.X + rect.Width - 9.0f, rect.Y + 3.0f},
+        };
+        graphics.FillPolygon(&softBrush, body, 4);
+        graphics.DrawPolygon(&pen, body, 4);
+        graphics.DrawLine(&pen, rect.X + 6.0f, rect.Y + rect.Height - 4.5f, rect.X + rect.Width - 6.0f, rect.Y + 8.0f);
+        graphics.FillRectangle(&brush, rect.X + 3.0f, rect.Y + rect.Height - 5.0f, rect.Width - 6.0f, 3.5f);
         break;
     }
     case ControlErase: {
-        graphics.DrawBezier(&pen,
-            rect.X + 2.0f, rect.Y + rect.Height - 6.0f,
-            rect.X + 7.0f, rect.Y + rect.Height - 12.0f,
-            rect.X + rect.Width - 9.0f, rect.Y + 10.0f,
-            rect.X + rect.Width - 3.0f, rect.Y + 6.0f);
-        graphics.DrawLine(&pen, rect.X + 5.0f, rect.Y + rect.Height - 3.0f, rect.X + rect.Width - 4.0f, rect.Y + 4.0f);
+        graphics.DrawArc(&pen, rect.X + 2.0f, rect.Y + 8.0f, rect.Width - 6.0f, rect.Height - 12.0f, 210.0f, 140.0f);
+        Gdiplus::PointF eraser[]{
+            {rect.X + rect.Width - 9.0f, rect.Y + 6.0f},
+            {rect.X + rect.Width - 4.0f, rect.Y + 10.0f},
+            {rect.X + rect.Width - 8.0f, rect.Y + 14.0f},
+            {rect.X + rect.Width - 13.0f, rect.Y + 10.0f},
+        };
+        graphics.FillPolygon(&softBrush, eraser, 4);
+        graphics.DrawPolygon(&pen, eraser, 4);
         break;
     }
     case ControlEraseBrush: {
-        Gdiplus::GraphicsPath body;
-        body.AddArc(rect.X + 3.0f, rect.Y + 3.0f, rect.Width - 8.0f, rect.Height - 8.0f, 45.0f, 270.0f);
-        body.CloseFigure();
-        graphics.FillPath(&softBrush, &body);
-        graphics.DrawPath(&pen, &body);
-        graphics.DrawLine(&pen, rect.X + 4.5f, rect.Y + rect.Height - 4.5f, rect.X + rect.Width - 4.0f, rect.Y + 4.5f);
+        Gdiplus::PointF eraser[]{
+            {rect.X + 5.0f, rect.Y + rect.Height - 4.0f},
+            {rect.X + rect.Width - 4.0f, rect.Y + 7.0f},
+            {rect.X + rect.Width - 8.0f, rect.Y + 3.0f},
+            {rect.X + rect.Width - 14.0f, rect.Y + 9.0f},
+            {rect.X + 9.0f, rect.Y + rect.Height - 3.0f},
+        };
+        graphics.FillPolygon(&softBrush, eraser, 5);
+        graphics.DrawPolygon(&pen, eraser, 5);
+        graphics.DrawLine(&pen, rect.X + 11.0f, rect.Y + rect.Height - 2.5f, rect.X + rect.Width - 8.0f, rect.Y + 8.5f);
         break;
     }
     case ControlEyedropper: {
-        graphics.FillEllipse(&brush, rect.X + rect.Width - 8.5f, rect.Y + 3.0f, 6.5f, 6.5f);
-        graphics.DrawLine(&pen, rect.X + 5.0f, rect.Y + rect.Height - 4.0f, rect.X + rect.Width - 6.0f, rect.Y + 6.0f);
-        graphics.DrawEllipse(&pen, rect.X + 2.5f, rect.Y + rect.Height - 9.0f, 8.0f, 8.0f);
+        graphics.DrawLine(&pen, rect.X + 5.0f, rect.Y + rect.Height - 4.5f, rect.X + rect.Width - 7.0f, rect.Y + 6.0f);
+        graphics.FillEllipse(&brush, rect.X + rect.Width - 10.0f, rect.Y + 2.5f, 7.5f, 7.5f);
+        graphics.DrawEllipse(&pen, rect.X + 2.5f, rect.Y + rect.Height - 10.5f, 9.0f, 9.0f);
+        graphics.DrawLine(&pen, rect.X + 4.0f, rect.Y + rect.Height - 3.0f, rect.X + 7.5f, rect.Y + rect.Height - 6.5f);
         break;
     }
     case ControlUndo: {
@@ -355,22 +616,9 @@ void DrawButtonGlyph(Gdiplus::Graphics& graphics, UINT controlId, const Gdiplus:
     case ControlSave: {
         graphics.DrawLine(&pen, rect.X + 3.0f, rect.Y + rect.Height - 6.0f, rect.X + rect.Width - 3.0f, rect.Y + rect.Height - 6.0f);
         graphics.DrawLine(&pen, rect.X + 6.0f, rect.Y + rect.Height - 10.0f, rect.X + rect.Width - 6.0f, rect.Y + rect.Height - 10.0f);
-        graphics.DrawLine(&pen, rect.X + rect.Width * 0.5f, rect.Y + 4.5f, rect.X + rect.Width * 0.5f, rect.Y + rect.Height - 12.0f);
+        graphics.DrawLine(&pen, rect.X + rect.Width * 0.5f, rect.Y + 4.0f, rect.X + rect.Width * 0.5f, rect.Y + rect.Height - 12.0f);
         graphics.DrawLine(&pen, rect.X + rect.Width * 0.5f, rect.Y + rect.Height - 12.0f, rect.X + rect.Width * 0.5f - 4.0f, rect.Y + rect.Height - 16.0f);
         graphics.DrawLine(&pen, rect.X + rect.Width * 0.5f, rect.Y + rect.Height - 12.0f, rect.X + rect.Width * 0.5f + 4.0f, rect.Y + rect.Height - 16.0f);
-        break;
-    }
-    case ControlMinimize: {
-        graphics.DrawLine(&pen, rect.X + 4.0f, rect.Y + rect.Height - 6.0f, rect.X + rect.Width - 4.0f, rect.Y + rect.Height - 6.0f);
-        break;
-    }
-    case ControlMaximize: {
-        graphics.DrawRectangle(&pen, rect.X + 4.0f, rect.Y + 4.0f, rect.Width - 8.0f, rect.Height - 8.0f);
-        break;
-    }
-    case ControlClose: {
-        graphics.DrawLine(&pen, rect.X + 5.0f, rect.Y + 5.0f, rect.X + rect.Width - 5.0f, rect.Y + rect.Height - 5.0f);
-        graphics.DrawLine(&pen, rect.X + rect.Width - 5.0f, rect.Y + 5.0f, rect.X + 5.0f, rect.Y + rect.Height - 5.0f);
         break;
     }
     default:
@@ -393,11 +641,65 @@ EditorWindow::~EditorWindow() {
     if (hintFont_ != nullptr) {
         DeleteObject(hintFont_);
     }
+    if (iconFont_ != nullptr) {
+        DeleteObject(iconFont_);
+    }
     if (smallIcon_ != nullptr) {
         DestroyIcon(smallIcon_);
     }
     if (largeIcon_ != nullptr) {
         DestroyIcon(largeIcon_);
+    }
+}
+
+HWND EditorWindow::Handle() const {
+    return hwnd_;
+}
+
+bool EditorWindow::HandleAccelerator(const MSG& message) {
+    if (hwnd_ == nullptr || !IsWindowVisible(hwnd_)) {
+        return false;
+    }
+    if (message.message != WM_KEYDOWN && message.message != WM_SYSKEYDOWN) {
+        return false;
+    }
+    if (message.hwnd != hwnd_ && !IsChild(hwnd_, message.hwnd)) {
+        return false;
+    }
+
+    const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    const bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    if (alt) {
+        return false;
+    }
+
+    if (message.wParam == VK_ESCAPE) {
+        HideBrushPreview();
+        ShowWindow(hwnd_, SW_HIDE);
+        return true;
+    }
+
+    if (!ctrl) {
+        return false;
+    }
+
+    switch (message.wParam) {
+    case 'C':
+        CopyToClipboardAndClose();
+        return true;
+    case 'Y':
+        SendMessageW(hwnd_, WM_COMMAND, ControlRedo, 0);
+        return true;
+    case 'Z':
+        if (shift) {
+            SendMessageW(hwnd_, WM_COMMAND, ControlRedo, 0);
+        } else {
+            SendMessageW(hwnd_, WM_COMMAND, ControlUndo, 0);
+        }
+        return true;
+    default:
+        return false;
     }
 }
 
@@ -439,6 +741,8 @@ HFONT EditorWindow::CreateUiFont(int height, int weight) const {
 
 void EditorWindow::ApplyWindowChrome() const {
     DWM_WINDOW_CORNER_PREFERENCE cornerPreference = DWMWCP_ROUND;
+    const BOOL darkMode = TRUE;
+    DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkMode, sizeof(darkMode));
     DwmSetWindowAttribute(hwnd_, DWMWA_WINDOW_CORNER_PREFERENCE, &cornerPreference, sizeof(cornerPreference));
     const COLORREF captionColor = kHeaderColor;
     const COLORREF textColor = kTitleColor;
@@ -461,14 +765,23 @@ bool EditorWindow::EnsureWindow() {
     wc.lpszClassName = kEditorClassName;
     RegisterClassW(&wc);
 
-    uiFont_ = CreateUiFont(17, FW_NORMAL);
-    titleFont_ = CreateUiFont(24, FW_SEMIBOLD);
-    hintFont_ = CreateUiFont(15, FW_NORMAL);
+    WNDCLASSW brushWc{};
+    brushWc.lpfnWndProc = BrushSizeWndProc;
+    brushWc.hInstance = instance_;
+    brushWc.hCursor = LoadCursorW(nullptr, IDC_SIZEALL);
+    brushWc.hbrBackground = nullptr;
+    brushWc.lpszClassName = kBrushSizeClassName;
+    RegisterClassW(&brushWc);
+
+    uiFont_ = CreateUiFont(15, FW_MEDIUM);
+    titleFont_ = CreateUiFont(17, FW_SEMIBOLD);
+    hintFont_ = CreateUiFont(13, FW_NORMAL);
+    iconFont_ = CreateIconFont(18);
 
     hwnd_ = CreateWindowExW(
         WS_EX_APPWINDOW,
         kEditorClassName,
-        L"OneShot Editor",
+        L"FrameSnap Editor",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
@@ -482,8 +795,8 @@ bool EditorWindow::EnsureWindow() {
         return false;
     }
 
-    smallIcon_ = util::CreateOneShotAppIcon(GetSystemMetrics(SM_CXSMICON));
-    largeIcon_ = util::CreateOneShotAppIcon(GetSystemMetrics(SM_CXICON));
+    smallIcon_ = util::CreateFrameSnapAppIcon(GetSystemMetrics(SM_CXSMICON));
+    largeIcon_ = util::CreateFrameSnapAppIcon(GetSystemMetrics(SM_CXICON));
     if (smallIcon_ != nullptr) {
         SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(smallIcon_));
     }
@@ -509,19 +822,8 @@ bool EditorWindow::EnsureWindow() {
         reinterpret_cast<HMENU>(ControlRedo), instance_, nullptr);
     saveButton_ = CreateWindowW(L"BUTTON", L"Save Copy", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 0, 0, hwnd_,
         reinterpret_cast<HMENU>(ControlSave), instance_, nullptr);
-    minimizeButton_ = CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 0, 0, hwnd_,
-        reinterpret_cast<HMENU>(ControlMinimize), instance_, nullptr);
-    maximizeButton_ = CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 0, 0, hwnd_,
-        reinterpret_cast<HMENU>(ControlMaximize), instance_, nullptr);
-    closeButton_ = CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 0, 0, hwnd_,
-        reinterpret_cast<HMENU>(ControlClose), instance_, nullptr);
-    widthSlider_ = CreateWindowW(TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | TBS_NOTICKS | TBS_TOOLTIPS | TBS_DOWNISLEFT, 0, 0, 0, 0, hwnd_,
+    widthSlider_ = CreateWindowW(kBrushSizeClassName, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd_,
         reinterpret_cast<HMENU>(ControlWidth), instance_, nullptr);
-    SetWindowTheme(widthSlider_, L"Explorer", nullptr);
-    SendMessageW(widthSlider_, TBM_SETRANGE, TRUE, MAKELPARAM(10, 480));
-    SendMessageW(widthSlider_, TBM_SETPAGESIZE, 0, 10);
-    SendMessageW(widthSlider_, TBM_SETLINESIZE, 0, 1);
-    SendMessageW(widthSlider_, TBM_SETTHUMBLENGTH, 26, 0);
 
     colorPicker_ = std::make_unique<ColorPickerControl>(instance_, hwnd_, ControlColor);
     colorPicker_->Create(0, 0, 220, 336);
@@ -560,6 +862,7 @@ void EditorWindow::Show(const std::shared_ptr<ImageData>& image, AppSettings& se
     strokes_.clear();
     redoStrokes_.clear();
     drawing_ = false;
+    brushPreviewVisible_ = false;
     activeTool_ = ActiveTool::Pen;
     inkTool_ = ActiveTool::Pen;
     inFlightStroke_ = {};
@@ -582,42 +885,107 @@ void EditorWindow::LayoutControls() {
     GetClientRect(hwnd_, &client);
     const RECT sidebar = SidebarRect();
     const int contentRight = sidebar.left - kOuterPadding;
-    const int toolTop = kTitleStripHeight + 14;
-    const int rowTwoTop = kTitleStripHeight + 70;
-    const int windowButtonsRight = client.right - 14;
-    const int closeX = windowButtonsRight - kWindowButtonWidth;
-    const int maximizeX = closeX - kWindowButtonWidth;
-    const int minimizeX = maximizeX - kWindowButtonWidth;
+    const int toolbarTop = 18;
+    const int contentWidth = contentRight - kOuterPadding;
+    const int brushBoxWidth = 74;
+    const int brushBoxHeight = 42;
 
-    MoveWindow(minimizeButton_, minimizeX, 8, kWindowButtonWidth, kWindowButtonHeight, TRUE);
-    MoveWindow(maximizeButton_, maximizeX, 8, kWindowButtonWidth, kWindowButtonHeight, TRUE);
-    MoveWindow(closeButton_, closeX, 8, kWindowButtonWidth, kWindowButtonHeight, TRUE);
+    enum class ToolbarMode {
+        Full,
+        Compact,
+        IconOnly,
+    };
 
-    int x = kOuterPadding;
-    MoveWindow(penButton_, x, toolTop, 110, kButtonHeight, TRUE);
-    x += 110 + kButtonGap;
-    MoveWindow(highlighterButton_, x, toolTop, 136, kButtonHeight, TRUE);
-    x += 136 + kButtonGap;
-    MoveWindow(eraseButton_, x, toolTop, 130, kButtonHeight, TRUE);
-    x += 130 + kButtonGap;
-    MoveWindow(eraseBrushButton_, x, toolTop, 124, kButtonHeight, TRUE);
-    x += 124 + kButtonGap;
-    MoveWindow(eyedropperButton_, x, toolTop, 134, kButtonHeight, TRUE);
+    ToolbarMode mode = ToolbarMode::Full;
+    int saveWidth = 120;
+    int actionWidth = 92;
+    std::array<int, 5> toolWidths{};
+    std::array<const wchar_t*, 5> labels{};
+    const wchar_t* undoLabel = L"Undo";
+    const wchar_t* redoLabel = L"Redo";
+    const wchar_t* saveLabel = L"Save copy";
 
-    const int saveWidth = 142;
-    const int actionWidth = 92;
-    const int saveX = contentRight - saveWidth;
-    const int redoX = saveX - kButtonGap - actionWidth;
-    const int undoX = redoX - kButtonGap - actionWidth;
-    MoveWindow(undoButton_, undoX, toolTop, actionWidth, kButtonHeight, TRUE);
-    MoveWindow(redoButton_, redoX, toolTop, actionWidth, kButtonHeight, TRUE);
-    MoveWindow(saveButton_, saveX, toolTop, saveWidth, kButtonHeight, TRUE);
+    const auto configureMode = [&](ToolbarMode nextMode) {
+        mode = nextMode;
+        if (mode == ToolbarMode::Full) {
+            saveWidth = 120;
+            actionWidth = 92;
+            toolWidths = {96, 132, 116, 114, 122};
+            labels = {L"Pen", L"Highlighter", L"Erase line", L"Erase pen", L"Eyedropper"};
+            undoLabel = L"Undo";
+            redoLabel = L"Redo";
+            saveLabel = L"Save copy";
+        } else if (mode == ToolbarMode::Compact) {
+            saveWidth = 104;
+            actionWidth = 84;
+            toolWidths = {82, 112, 94, 92, 100};
+            labels = {L"Pen", L"Highlight", L"Line erase", L"Brush erase", L"Picker"};
+            undoLabel = L"Undo";
+            redoLabel = L"Redo";
+            saveLabel = L"Save";
+        } else {
+            saveWidth = 48;
+            actionWidth = 44;
+            toolWidths = {44, 44, 44, 44, 44};
+            labels = {L"", L"", L"", L"", L""};
+            undoLabel = L"";
+            redoLabel = L"";
+            saveLabel = L"";
+        }
+    };
 
-    const int sliderX = kOuterPadding + kSliderLabelWidth + 16;
-    const int sliderWidth = std::max(220, contentRight - sliderX - kSliderValueWidth - 12);
-    MoveWindow(widthSlider_, sliderX, rowTwoTop + 14, sliderWidth, 32, TRUE);
+    const auto rowWidthForCurrentMode = [&]() {
+        return std::accumulate(toolWidths.begin(), toolWidths.end(), 0) + brushBoxWidth + saveWidth + actionWidth * 2 + (kButtonGap * 8);
+    };
 
-    colorPicker_->Move(sidebar.left + 20, kToolbarHeight + 20, sidebar.right - sidebar.left - 40, 350);
+    configureMode(ToolbarMode::Full);
+    if (rowWidthForCurrentMode() > contentWidth) {
+        configureMode(ToolbarMode::Compact);
+    }
+    if (rowWidthForCurrentMode() > contentWidth) {
+        configureMode(ToolbarMode::IconOnly);
+    }
+
+    SetWindowTextW(penButton_, labels[0]);
+    SetWindowTextW(highlighterButton_, labels[1]);
+    SetWindowTextW(eraseButton_, labels[2]);
+    SetWindowTextW(eraseBrushButton_, labels[3]);
+    SetWindowTextW(eyedropperButton_, labels[4]);
+    SetWindowTextW(undoButton_, undoLabel);
+    SetWindowTextW(redoButton_, redoLabel);
+    SetWindowTextW(saveButton_, saveLabel);
+
+    const int adjustedSaveX = contentRight - saveWidth;
+    const int adjustedRedoX = adjustedSaveX - kButtonGap - actionWidth;
+    const int adjustedUndoX = adjustedRedoX - kButtonGap - actionWidth;
+
+    HDWP defer = BeginDeferWindowPos(9);
+    if (defer != nullptr) {
+        int x = kOuterPadding;
+        defer = DeferWindowPos(defer, penButton_, nullptr, x, toolbarTop, toolWidths[0], kButtonHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+        x += toolWidths[0] + kButtonGap;
+        defer = DeferWindowPos(defer, highlighterButton_, nullptr, x, toolbarTop, toolWidths[1], kButtonHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+        x += toolWidths[1] + kButtonGap;
+        defer = DeferWindowPos(defer, eraseButton_, nullptr, x, toolbarTop, toolWidths[2], kButtonHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+        x += toolWidths[2] + kButtonGap;
+        defer = DeferWindowPos(defer, eraseBrushButton_, nullptr, x, toolbarTop, toolWidths[3], kButtonHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+        x += toolWidths[3] + kButtonGap;
+        defer = DeferWindowPos(defer, eyedropperButton_, nullptr, x, toolbarTop, toolWidths[4], kButtonHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+        x += toolWidths[4] + kButtonGap;
+        defer = DeferWindowPos(defer, widthSlider_, nullptr, x, toolbarTop, brushBoxWidth, brushBoxHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+        defer = DeferWindowPos(defer, undoButton_, nullptr, adjustedUndoX, toolbarTop, actionWidth, kButtonHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+        defer = DeferWindowPos(defer, redoButton_, nullptr, adjustedRedoX, toolbarTop, actionWidth, kButtonHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+        defer = DeferWindowPos(defer, saveButton_, nullptr, adjustedSaveX, toolbarTop, saveWidth, kButtonHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (defer != nullptr) {
+            EndDeferWindowPos(defer);
+        }
+    }
+
+    colorPicker_->Move(
+        static_cast<int>(sidebar.left + 18),
+        kToolbarHeight + 18,
+        static_cast<int>(sidebar.right - sidebar.left - 36),
+        static_cast<int>(std::max<LONG>(240, client.bottom - kToolbarHeight - 36)));
     RefreshButtons();
 }
 
@@ -648,13 +1016,13 @@ Gdiplus::RectF EditorWindow::ImageToViewRect() const {
     if (image_ == nullptr || image_->width == 0 || image_->height == 0) {
         return {0, 0, 0, 0};
     }
-    const float canvasWidth = static_cast<float>(canvas.right - canvas.left);
-    const float canvasHeight = static_cast<float>(canvas.bottom - canvas.top);
+    const float canvasWidth = static_cast<float>(std::max<LONG>(1, (canvas.right - canvas.left) - 32));
+    const float canvasHeight = static_cast<float>(std::max<LONG>(1, (canvas.bottom - canvas.top) - 32));
     const float scale = std::min(canvasWidth / static_cast<float>(image_->width), canvasHeight / static_cast<float>(image_->height));
     const float width = image_->width * scale;
     const float height = image_->height * scale;
-    const float x = canvas.left + (canvasWidth - width) * 0.5f;
-    const float y = canvas.top + (canvasHeight - height) * 0.5f;
+    const float x = canvas.left + 16.0f + (canvasWidth - width) * 0.5f;
+    const float y = canvas.top + 16.0f + (canvasHeight - height) * 0.5f;
     return {x, y, width, height};
 }
 
@@ -714,7 +1082,7 @@ void EditorWindow::InvalidateSidebar() const {
 }
 
 void EditorWindow::RefreshButtons() const {
-    const std::array<HWND, 11> buttons{
+    const std::array<HWND, 8> buttons{
         penButton_,
         highlighterButton_,
         eraseButton_,
@@ -723,9 +1091,6 @@ void EditorWindow::RefreshButtons() const {
         undoButton_,
         redoButton_,
         saveButton_,
-        minimizeButton_,
-        maximizeButton_,
-        closeButton_,
     };
     for (const HWND button : buttons) {
         if (button != nullptr) {
@@ -942,9 +1307,9 @@ void EditorWindow::UpdateToolbarState() {
     }
 
     const ActiveTool widthTool = ResolveWidthTool(activeTool_, inkTool_);
-    const int value = widthTool == ActiveTool::Highlighter ? static_cast<int>(std::round(settings_->highlighterWidth * 10.0f))
-                                                           : static_cast<int>(std::round(settings_->penWidth * 10.0f));
-    SendMessageW(widthSlider_, TBM_SETPOS, TRUE, value);
+    const int value = widthTool == ActiveTool::Highlighter ? static_cast<int>(std::round(settings_->highlighterWidth * 20.0f))
+                                                           : static_cast<int>(std::round(settings_->penWidth * 20.0f));
+    SendMessageW(widthSlider_, WM_EDITOR_BRUSH_SET_VALUE, value, 0);
     EnableWindow(widthSlider_, activeTool_ != ActiveTool::EraseLine && activeTool_ != ActiveTool::Eyedropper);
     EnableWindow(undoButton_, !strokes_.empty());
     EnableWindow(redoButton_, !redoStrokes_.empty());
@@ -952,12 +1317,12 @@ void EditorWindow::UpdateToolbarState() {
     InvalidateSidebar();
 }
 
-void EditorWindow::UpdateWidthsFromSlider() {
+void EditorWindow::UpdateWidthFromScaledValue(int scaledValue) {
     if (settings_ == nullptr) {
         return;
     }
 
-    const float width = static_cast<float>(SendMessageW(widthSlider_, TBM_GETPOS, 0, 0)) / 10.0f;
+    const float width = static_cast<float>(scaledValue) / 20.0f;
     const ActiveTool widthTool = ResolveWidthTool(activeTool_, inkTool_);
     if (widthTool == ActiveTool::Highlighter) {
         settings_->highlighterWidth = width;
@@ -967,6 +1332,55 @@ void EditorWindow::UpdateWidthsFromSlider() {
     RECT toolbarRect = RectWithSize(0, kTitleStripHeight, SidebarRect().left, kToolbarHeight - kTitleStripHeight);
     InvalidateRect(hwnd_, &toolbarRect, FALSE);
     InvalidateSidebar();
+}
+
+float EditorWindow::PreviewStrokeDiameter(float width) const {
+    if (image_ == nullptr || image_->width <= 0 || image_->height <= 0) {
+        return std::max(10.0f, width * 2.0f);
+    }
+
+    Stroke previewStroke{};
+    previewStroke.tool = ResolveWidthTool(activeTool_, inkTool_);
+    previewStroke.width = width;
+    const auto imageRect = ImageToViewRect();
+    const float scale = imageRect.Width / static_cast<float>(std::max(1, image_->width));
+    return std::max(10.0f, EffectiveStrokeWidth(previewStroke) * scale);
+}
+
+RECT EditorWindow::BrushPreviewRect(POINT point, float width) const {
+    RECT client{};
+    GetClientRect(hwnd_, &client);
+    const float diameter = PreviewStrokeDiameter(width);
+    POINT center{point.x + 26, point.y - 28};
+    if (center.y - static_cast<int>(diameter * 0.5f) < kToolbarHeight + 6) {
+        center.y = point.y + 30;
+    }
+    center.x = std::clamp<int>(static_cast<int>(center.x), 24, std::max(24, static_cast<int>(client.right) - 24));
+    center.y = std::clamp<int>(static_cast<int>(center.y), 24, std::max(24, static_cast<int>(client.bottom) - 24));
+
+    const int radius = static_cast<int>(std::ceil(diameter * 0.5f + 6.0f));
+    return {center.x - radius, center.y - radius, center.x + radius, center.y + radius};
+}
+
+void EditorWindow::UpdateBrushPreview(POINT point, float width) {
+    RECT dirty = {};
+    if (brushPreviewVisible_) {
+        dirty = BrushPreviewRect(brushPreviewPoint_, brushPreviewWidth_);
+    }
+    brushPreviewVisible_ = true;
+    brushPreviewPoint_ = point;
+    brushPreviewWidth_ = width;
+    dirty = UnionRectSafe(dirty, BrushPreviewRect(point, width));
+    InvalidateRect(hwnd_, &dirty, FALSE);
+}
+
+void EditorWindow::HideBrushPreview() {
+    if (!brushPreviewVisible_) {
+        return;
+    }
+    const RECT dirty = BrushPreviewRect(brushPreviewPoint_, brushPreviewWidth_);
+    brushPreviewVisible_ = false;
+    InvalidateRect(hwnd_, &dirty, FALSE);
 }
 
 ImageData EditorWindow::RenderDocument() const {
@@ -1044,7 +1458,8 @@ void EditorWindow::PaintButton(const DRAWITEMSTRUCT& drawItem) const {
     const UINT controlId = drawItem.CtlID;
     const bool enabled = (drawItem.itemState & ODS_DISABLED) == 0;
     const bool pressed = (drawItem.itemState & ODS_SELECTED) != 0;
-    const bool windowButton = controlId == ControlMinimize || controlId == ControlMaximize || controlId == ControlClose;
+    const std::wstring label = ReadWindowText(drawItem.hwndItem);
+    const bool iconOnly = label.empty();
     bool active = false;
     if (controlId == ControlPen) {
         active = activeTool_ == ActiveTool::Pen;
@@ -1058,38 +1473,27 @@ void EditorWindow::PaintButton(const DRAWITEMSTRUCT& drawItem) const {
         active = activeTool_ == ActiveTool::Eyedropper;
     }
 
-    COLORREF fill = windowButton ? kHeaderColor : kCardColor;
-    COLORREF border = windowButton ? kHeaderColor : kBorderColor;
-    COLORREF text = kTitleColor;
-    int cornerRadius = windowButton ? 12 : 18;
+    COLORREF fill = RGB(20, 27, 36);
+    COLORREF border = RGB(52, 64, 82);
+    COLORREF text = kBodyColor;
+    int cornerRadius = 16;
 
     if (!enabled) {
-        fill = windowButton ? kHeaderColor : RGB(242, 245, 248);
-        border = windowButton ? kHeaderColor : RGB(226, 232, 240);
-        text = RGB(148, 163, 184);
-    } else if (windowButton) {
-        if (controlId == ControlClose && pressed) {
-            fill = RGB(220, 38, 38);
-            border = fill;
-            text = RGB(255, 255, 255);
-        } else if (pressed) {
-            fill = RGB(230, 235, 244);
-            border = fill;
-        } else {
-            fill = kHeaderColor;
-            border = kHeaderColor;
-        }
+        fill = RGB(17, 22, 30);
+        border = RGB(33, 42, 55);
+        text = RGB(94, 105, 122);
     } else if (controlId == ControlSave) {
         fill = pressed ? kAccentPressedColor : kAccentColor;
         border = fill;
         text = RGB(255, 255, 255);
     } else if (active) {
-        fill = RGB(225, 236, 255);
-        border = RGB(110, 159, 245);
-        text = RGB(25, 73, 184);
+        fill = RGB(30, 58, 138);
+        border = RGB(96, 165, 250);
+        text = RGB(239, 246, 255);
     } else if (pressed) {
-        fill = RGB(232, 238, 245);
-        border = RGB(191, 201, 214);
+        fill = RGB(28, 36, 48);
+        border = RGB(84, 96, 116);
+        text = RGB(232, 238, 247);
     }
 
     HBRUSH brush = CreateSolidBrush(fill);
@@ -1102,33 +1506,22 @@ void EditorWindow::PaintButton(const DRAWITEMSTRUCT& drawItem) const {
     DeleteObject(brush);
     DeleteObject(pen);
 
-    Gdiplus::Graphics graphics(drawItem.hDC);
-    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    Gdiplus::RectF iconRect(
-        static_cast<Gdiplus::REAL>(drawItem.rcItem.left + 13),
-        static_cast<Gdiplus::REAL>(drawItem.rcItem.top + (drawItem.rcItem.bottom - drawItem.rcItem.top - 18) / 2),
-        18.0f,
-        18.0f);
-    if (windowButton) {
-        iconRect = Gdiplus::RectF(
-            static_cast<Gdiplus::REAL>(drawItem.rcItem.left + (drawItem.rcItem.right - drawItem.rcItem.left - 14) / 2),
-            static_cast<Gdiplus::REAL>(drawItem.rcItem.top + (drawItem.rcItem.bottom - drawItem.rcItem.top - 14) / 2),
-            14.0f,
-            14.0f);
-    }
-    if (!(controlId == ControlMaximize && IsZoomed(hwnd_))) {
-        DrawButtonGlyph(graphics, controlId, iconRect, text);
+    const wchar_t* glyph = ButtonGlyph(controlId);
+    if (glyph[0] != L'\0') {
+        SetBkMode(drawItem.hDC, TRANSPARENT);
+        SetTextColor(drawItem.hDC, text);
+        SelectObject(drawItem.hDC, iconFont_ != nullptr ? iconFont_ : uiFont_);
+        RECT glyphRect = drawItem.rcItem;
+        if (iconOnly) {
+            DrawTextW(drawItem.hDC, glyph, -1, &glyphRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        } else {
+            glyphRect.left += 12;
+            glyphRect.right = glyphRect.left + 24;
+            DrawTextW(drawItem.hDC, glyph, -1, &glyphRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
     }
 
-    if (controlId == ControlMaximize && IsZoomed(hwnd_)) {
-        Gdiplus::Pen restorePen(ToGdiColor(text), 2.0f);
-        restorePen.SetLineJoin(Gdiplus::LineJoinRound);
-        const Gdiplus::RectF restoreRect(iconRect.X + 2.0f, iconRect.Y + 2.0f, iconRect.Width - 4.0f, iconRect.Height - 4.0f);
-        graphics.DrawRectangle(&restorePen, restoreRect.X - 2.0f, restoreRect.Y + 2.0f, restoreRect.Width, restoreRect.Height);
-        graphics.DrawRectangle(&restorePen, restoreRect.X + 1.0f, restoreRect.Y - 1.0f, restoreRect.Width, restoreRect.Height);
-    }
-
-    if (windowButton) {
+    if (iconOnly) {
         return;
     }
 
@@ -1136,8 +1529,8 @@ void EditorWindow::PaintButton(const DRAWITEMSTRUCT& drawItem) const {
     SetTextColor(drawItem.hDC, text);
     SelectObject(drawItem.hDC, uiFont_);
     RECT textRect = drawItem.rcItem;
-    textRect.left += 38;
-    DrawTextW(drawItem.hDC, ReadWindowText(drawItem.hwndItem).c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    textRect.left += 42;
+    DrawTextW(drawItem.hDC, label.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 void EditorWindow::Paint() {
@@ -1196,7 +1589,6 @@ void EditorWindow::Paint() {
     fillRect(toolbarBody, kToolbarColor);
     fillRect(sidebar, kSidebarColor);
 
-    fillRect(RectWithSize(0, kTitleStripHeight - 1, client.right, 1), kBorderColor);
     fillRect(RectWithSize(0, kToolbarHeight - 1, client.right, 1), kBorderColor);
     fillRect(RectWithSize(sidebar.left, kToolbarHeight, 1, client.bottom - kToolbarHeight), kBorderColor);
 
@@ -1204,55 +1596,11 @@ void EditorWindow::Paint() {
     graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
     graphics.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+    graphics.SetInterpolationMode(sizing_ ? Gdiplus::InterpolationModeLowQuality : Gdiplus::InterpolationModeHighQualityBicubic);
 
     RECT canvasPaint = util::IntersectRectSafe(canvas, paintRect);
     if (!util::IsRectEmptySafe(canvasPaint)) {
-        Gdiplus::SolidBrush canvasBrush(ToGdiColor(kCanvasColor));
-        graphics.FillRectangle(&canvasBrush,
-            static_cast<Gdiplus::REAL>(canvas.left),
-            static_cast<Gdiplus::REAL>(canvas.top),
-            static_cast<Gdiplus::REAL>(canvas.right - canvas.left),
-            static_cast<Gdiplus::REAL>(canvas.bottom - canvas.top));
-
-        Gdiplus::SolidBrush dotBrush(ToGdiColor(kCanvasStripeColor));
-        const LONG dotStep = 28;
-        const LONG dotStartY = canvas.top + ((std::max(canvas.top, paintRect.top) - canvas.top) / dotStep) * dotStep;
-        const LONG dotStartX = canvas.left + ((std::max(canvas.left, paintRect.left) - canvas.left) / dotStep) * dotStep;
-        for (LONG y = dotStartY; y < canvas.bottom; y += dotStep) {
-            for (LONG x = dotStartX; x < canvas.right; x += dotStep) {
-                graphics.FillEllipse(&dotBrush,
-                    static_cast<Gdiplus::REAL>(x + 5),
-                    static_cast<Gdiplus::REAL>(y + 5),
-                    4.0f,
-                    4.0f);
-            }
-        }
-
-        Gdiplus::Pen canvasBorder(ToGdiColor(kCanvasFrameColor), 1.0f);
-        graphics.DrawRectangle(&canvasBorder,
-            static_cast<Gdiplus::REAL>(canvas.left),
-            static_cast<Gdiplus::REAL>(canvas.top),
-            static_cast<Gdiplus::REAL>(canvas.right - canvas.left),
-            static_cast<Gdiplus::REAL>(canvas.bottom - canvas.top));
-    }
-
-    SelectObject(backDc, titleFont_);
-    SetBkMode(backDc, TRANSPARENT);
-    SetTextColor(backDc, kTitleColor);
-    RECT headerTitleRect = RectWithSize(kOuterPadding, 7, 260, 24);
-    DrawTextW(backDc, L"OneShot Editor", -1, &headerTitleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    SelectObject(backDc, hintFont_);
-    SetTextColor(backDc, kBodyColor);
-    RECT headerSubtitleRect = RectWithSize(kOuterPadding, 25, 460, 16);
-    const wchar_t* subtitle = image_ != nullptr && image_->hdrSource ? L"Frozen HDR-aware capture with vector ink" : L"Frozen capture with vector ink";
-    DrawTextW(backDc, subtitle, -1, &headerSubtitleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-
-    if (image_ != nullptr) {
-        SelectObject(backDc, uiFont_);
-        SetTextColor(backDc, kMutedColor);
-        RECT captureMetaRect = RectWithSize(kOuterPadding + 272, 13, 300, 18);
-        const std::wstring captureMeta = util::FormatRectSize(image_->width, image_->height);
-        DrawTextW(backDc, captureMeta.c_str(), -1, &captureMetaRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        drawRoundedCard(canvas, kCanvasColor, kCanvasFrameColor, 22);
     }
 
     if (image_ != nullptr) {
@@ -1262,10 +1610,12 @@ void EditorWindow::Paint() {
         InflateRect(&expandedImageBounds, 16, 18);
         if (!util::IsRectEmptySafe(util::IntersectRectSafe(expandedImageBounds, paintRect))) {
             Gdiplus::Bitmap bitmap(image_->width, image_->height, image_->width * 4, PixelFormat32bppARGB, const_cast<BYTE*>(image_->pixels.data()));
-            Gdiplus::SolidBrush shadowBrush(Gdiplus::Color(26, 15, 23, 42));
-            graphics.FillRectangle(&shadowBrush, imageRect.X + 10.0f, imageRect.Y + 12.0f, imageRect.Width, imageRect.Height);
+            if (!sizing_) {
+                Gdiplus::SolidBrush shadowBrush(Gdiplus::Color(28, 0, 0, 0));
+                graphics.FillRectangle(&shadowBrush, imageRect.X + 10.0f, imageRect.Y + 12.0f, imageRect.Width, imageRect.Height);
+            }
             graphics.DrawImage(&bitmap, imageRect);
-            Gdiplus::Pen imageBorder(ToGdiColor(RGB(203, 213, 225)), 1.0f);
+            Gdiplus::Pen imageBorder(ToGdiColor(RGB(71, 85, 105)), 1.0f);
             graphics.DrawRectangle(&imageBorder, imageRect);
 
             if (!markupImage_.pixels.empty()) {
@@ -1281,85 +1631,18 @@ void EditorWindow::Paint() {
         }
     }
 
-    SelectObject(backDc, uiFont_);
-    SetBkMode(backDc, TRANSPARENT);
-    SetTextColor(backDc, kMutedColor);
-    RECT sliderRect = ChildToClientRect(hwnd_, widthSlider_);
-    RECT sliderLabelRect = RectWithSize(kOuterPadding, kTitleStripHeight + 82, kSliderLabelWidth, 20);
-    DrawTextW(backDc, L"Brush size", -1, &sliderLabelRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    if (settings_ != nullptr) {
-        const ActiveTool widthTool = ResolveWidthTool(activeTool_, inkTool_);
-        const float width = widthTool == ActiveTool::Highlighter ? settings_->highlighterWidth : settings_->penWidth;
-        const std::wstring widthLabel = FormatBrushWidthLabel(width);
-        RECT badgeRect = RectWithSize(sliderRect.right + 12, kTitleStripHeight + 78, kSliderValueWidth, 30);
-        HBRUSH badgeBrush = CreateSolidBrush(RGB(229, 236, 247));
-        HPEN badgePen = CreatePen(PS_SOLID, 1, RGB(196, 208, 223));
-        HGDIOBJ oldBrush = SelectObject(backDc, badgeBrush);
-        HGDIOBJ oldPen = SelectObject(backDc, badgePen);
-        RoundRect(backDc, badgeRect.left, badgeRect.top, badgeRect.right, badgeRect.bottom, 14, 14);
-        SelectObject(backDc, oldBrush);
-        SelectObject(backDc, oldPen);
-        DeleteObject(badgeBrush);
-        DeleteObject(badgePen);
-        SetTextColor(backDc, kTitleColor);
-        DrawTextW(backDc, widthLabel.c_str(), -1, &badgeRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
-
-    const RECT infoCard = RectWithSize(sidebar.left + 20, kToolbarHeight + 388, sidebar.right - sidebar.left - 40, 236);
-    drawRoundedCard(infoCard, kCardColor, kBorderColor, 18);
-
-    SetTextColor(backDc, kTitleColor);
-    RECT panelTitleRect = RectWithSize(infoCard.left + 18, infoCard.top + 18, 180, 20);
-    DrawTextW(backDc, L"Capture", -1, &panelTitleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    if (image_ != nullptr && settings_ != nullptr) {
-        const std::wstring toolLabel =
-            activeTool_ == ActiveTool::Highlighter ? L"Highlighter" :
-            activeTool_ == ActiveTool::EraseLine ? L"Erase line" :
-            activeTool_ == ActiveTool::EraseBrush ? L"Erase pen" :
-            activeTool_ == ActiveTool::Eyedropper ? L"Eyedropper" :
-            L"Pen";
-        const COLORREF inkColor = inkTool_ == ActiveTool::Highlighter ? settings_->highlighterColor : settings_->penColor;
-        const ActiveTool widthTool = ResolveWidthTool(activeTool_, inkTool_);
-        const std::wstring widthValue = FormatBrushWidthLabel(widthTool == ActiveTool::Highlighter ? settings_->highlighterWidth : settings_->penWidth);
-
-        SetTextColor(backDc, kMutedColor);
-        RECT resolutionLabel = RectWithSize(infoCard.left + 18, infoCard.top + 54, 120, 18);
-        RECT resolutionValue = RectWithSize(infoCard.left + 18, infoCard.top + 74, 168, 24);
-        RECT toolLabelRect = RectWithSize(infoCard.left + 18, infoCard.top + 112, 120, 18);
-        RECT toolValueRect = RectWithSize(infoCard.left + 18, infoCard.top + 132, 168, 24);
-        RECT widthLabelRect = RectWithSize(infoCard.left + 18, infoCard.top + 170, 120, 18);
-        RECT widthValueRect = RectWithSize(infoCard.left + 18, infoCard.top + 190, 168, 22);
-        DrawTextW(backDc, L"Resolution", -1, &resolutionLabel, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        DrawTextW(backDc, L"Tool", -1, &toolLabelRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        DrawTextW(backDc, L"Brush", -1, &widthLabelRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-        SetTextColor(backDc, kTitleColor);
-        DrawTextW(backDc, util::FormatRectSize(image_->width, image_->height).c_str(), -1, &resolutionValue, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        DrawTextW(backDc, toolLabel.c_str(), -1, &toolValueRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        DrawTextW(backDc, widthValue.c_str(), -1, &widthValueRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-        RECT swatchRect = RectWithSize(infoCard.right - 112, infoCard.top + 54, 78, 78);
-        HBRUSH swatchBrush = CreateSolidBrush(inkColor);
-        HPEN swatchPen = CreatePen(PS_SOLID, 1, RGB(148, 163, 184));
-        HGDIOBJ oldSwatchBrush = SelectObject(backDc, swatchBrush);
-        HGDIOBJ oldSwatchPen = SelectObject(backDc, swatchPen);
-        RoundRect(backDc, swatchRect.left, swatchRect.top, swatchRect.right, swatchRect.bottom, 18, 18);
-        SelectObject(backDc, oldSwatchBrush);
-        SelectObject(backDc, oldSwatchPen);
-        DeleteObject(swatchBrush);
-        DeleteObject(swatchPen);
-
-        RECT hexRect = RectWithSize(infoCard.right - 126, infoCard.top + 142, 116, 18);
-        SetTextColor(backDc, kMutedColor);
-        DrawTextW(backDc, util::ColorToHex(inkColor).c_str(), -1, &hexRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        if (image_->hdrSource) {
-            const RECT hdrBadge = RectWithSize(infoCard.right - 116, infoCard.top + 182, 92, 26);
-            drawRoundedCard(hdrBadge, RGB(239, 246, 255), RGB(191, 219, 254), 14);
-            SetTextColor(backDc, RGB(30, 64, 175));
-            DrawTextW(backDc, L"HDR", -1, const_cast<RECT*>(&hdrBadge), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        }
+    if (brushPreviewVisible_ && settings_ != nullptr) {
+        const ActiveTool previewTool = ResolveWidthTool(activeTool_, inkTool_);
+        const COLORREF previewColor = previewTool == ActiveTool::Highlighter ? settings_->highlighterColor : settings_->penColor;
+        const float diameter = PreviewStrokeDiameter(brushPreviewWidth_);
+        RECT rect = BrushPreviewRect(brushPreviewPoint_, brushPreviewWidth_);
+        const float drawX = static_cast<float>(rect.left + 6);
+        const float drawY = static_cast<float>(rect.top + 6);
+        const float drawDiameter = diameter;
+        Gdiplus::SolidBrush fillBrush(ToGdiColor(previewColor, previewTool == ActiveTool::Highlighter ? 72 : 40));
+        Gdiplus::Pen outlinePen(ToGdiColor(RGB(255, 255, 255), 220), 2.0f);
+        graphics.FillEllipse(&fillBrush, drawX, drawY, drawDiameter, drawDiameter);
+        graphics.DrawEllipse(&outlinePen, drawX, drawY, drawDiameter, drawDiameter);
     }
 
     SetViewportOrgEx(backDc, 0, 0, nullptr);
@@ -1385,8 +1668,8 @@ LRESULT EditorWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     switch (message) {
     case WM_GETMINMAXINFO: {
         auto* minmax = reinterpret_cast<MINMAXINFO*>(lParam);
-        minmax->ptMinTrackSize.x = 1240;
-        minmax->ptMinTrackSize.y = 760;
+        minmax->ptMinTrackSize.x = 1100;
+        minmax->ptMinTrackSize.y = 720;
         return 0;
     }
     case WM_SIZE:
@@ -1450,23 +1733,18 @@ LRESULT EditorWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         case ControlSave:
             SaveImage();
             return 0;
-        case ControlMinimize:
-            ShowWindow(hwnd_, SW_MINIMIZE);
-            return 0;
-        case ControlMaximize:
-            ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE);
-            return 0;
-        case ControlClose:
-            ShowWindow(hwnd_, SW_HIDE);
-            return 0;
         default:
             break;
         }
         break;
-    case WM_HSCROLL:
-        if (reinterpret_cast<HWND>(lParam) == widthSlider_) {
-            UpdateWidthsFromSlider();
-        }
+    case WM_EDITOR_BRUSH_CHANGED: {
+        const int scaledValue = static_cast<int>(wParam);
+        UpdateWidthFromScaledValue(scaledValue);
+        UpdateBrushPreview({GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)}, static_cast<float>(scaledValue) / 20.0f);
+        return 0;
+    }
+    case WM_EDITOR_BRUSH_DRAG_END:
+        HideBrushPreview();
         return 0;
     case WM_APP_COLOR_CHANGED:
         if (settings_ != nullptr) {
@@ -1480,6 +1758,7 @@ LRESULT EditorWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         return 0;
     case WM_KEYDOWN:
         if (wParam == VK_ESCAPE) {
+            HideBrushPreview();
             ShowWindow(hwnd_, SW_HIDE);
             return 0;
         }
@@ -1498,23 +1777,13 @@ LRESULT EditorWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
             }
         }
         break;
-    case WM_NCHITTEST: {
-        const LRESULT hit = DefWindowProcW(hwnd_, message, wParam, lParam);
-        if (hit != HTCLIENT) {
-            return hit;
-        }
-        POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-        ScreenToClient(hwnd_, &point);
-        if (point.y < kTitleStripHeight) {
-            const RECT minimizeRect = ChildToClientRect(hwnd_, minimizeButton_);
-            const RECT maximizeRect = ChildToClientRect(hwnd_, maximizeButton_);
-            const RECT closeRect = ChildToClientRect(hwnd_, closeButton_);
-            if (!PtInRect(&minimizeRect, point) && !PtInRect(&maximizeRect, point) && !PtInRect(&closeRect, point)) {
-                return HTCAPTION;
-            }
-        }
-        return HTCLIENT;
-    }
+    case WM_ENTERSIZEMOVE:
+        sizing_ = true;
+        return 0;
+    case WM_EXITSIZEMOVE:
+        sizing_ = false;
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return 0;
     case WM_LBUTTONDOWN: {
         const POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         const auto imagePoint = ClientToImage(point);
@@ -1586,6 +1855,7 @@ LRESULT EditorWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         }
         break;
     case WM_CLOSE:
+        HideBrushPreview();
         ShowWindow(hwnd_, SW_HIDE);
         return 0;
     case WM_DESTROY:

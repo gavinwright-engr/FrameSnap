@@ -1,6 +1,6 @@
-# OneShot
+# FrameSnap
 
-Native Windows 11 screenshot app prototype focused on warm-state latency:
+Prototype exploring low-latency screenshot pipeline on Windows (DXGI, HDR-aware, async)
 
 - global hotkey via `RegisterHotKey`
 - dimming overlay with drag or click-click rectangle selection
@@ -20,10 +20,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 
 Built binary:
 
-- `out\Debug\OneShot.exe`
+- `out\Debug\FrameSnap.exe`
 
 ## Notes
 
-- Settings are stored under `%LOCALAPPDATA%\OneShot\settings.ini`.
-- Metrics are logged under `%LOCALAPPDATA%\OneShot\metrics.log`.
+- Settings are stored under `%LOCALAPPDATA%\FrameSnap\settings.ini`.
+- Metrics are logged under `%LOCALAPPDATA%\FrameSnap\metrics.log`.
 - This is a native v1 implementation, not a full Snagit/ShareX replacement. The core hot path is implemented; broader workflows and richer markup tools are intentionally deferred.

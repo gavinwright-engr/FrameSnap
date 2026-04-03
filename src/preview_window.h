@@ -6,6 +6,7 @@
 class PreviewWindow {
 public:
     PreviewWindow(HINSTANCE instance, HWND owner);
+    ~PreviewWindow();
 
     void Show(const std::shared_ptr<ImageData>& image, UINT timeoutMs);
     void Hide();
@@ -21,4 +22,6 @@ private:
     HWND owner_{};
     HWND hwnd_{};
     std::shared_ptr<ImageData> image_;
+    HFONT titleFont_{};
+    HFONT bodyFont_{};
 };

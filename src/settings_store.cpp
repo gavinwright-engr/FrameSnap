@@ -30,6 +30,8 @@ SettingsStore::SettingsStore()
 AppSettings SettingsStore::Load() const {
     AppSettings settings{};
     settings.saveFolder = util::DefaultSaveFolder().wstring();
+    settings.runAtStartupEnabled = ReadIniInt(path_, L"app", L"run_at_startup", 1) != 0;
+    settings.printScreenOverrideEnabled = ReadIniInt(path_, L"app", L"print_screen_override", util::IsPrintScreenSnippingEnabled() ? 0 : 1) != 0;
     settings.autoSaveEnabled = ReadIniInt(path_, L"capture", L"auto_save", 1) != 0;
     settings.clickModeEnabled = ReadIniInt(path_, L"capture", L"click_mode", 1) != 0;
     settings.soundEnabled = ReadIniInt(path_, L"capture", L"sound", 1) != 0;
@@ -52,7 +54,9 @@ AppSettings SettingsStore::Load() const {
 bool SettingsStore::Save(const AppSettings& settings) const {
     std::error_code error;
     std::filesystem::create_directories(std::filesystem::path(settings.saveFolder), error);
-    return WriteIniInt(path_, L"capture", L"auto_save", settings.autoSaveEnabled ? 1 : 0) &&
+    return WriteIniInt(path_, L"app", L"run_at_startup", settings.runAtStartupEnabled ? 1 : 0) &&
+           WriteIniInt(path_, L"app", L"print_screen_override", settings.printScreenOverrideEnabled ? 1 : 0) &&
+           WriteIniInt(path_, L"capture", L"auto_save", settings.autoSaveEnabled ? 1 : 0) &&
            WriteIniInt(path_, L"capture", L"click_mode", settings.clickModeEnabled ? 1 : 0) &&
            WriteIniInt(path_, L"capture", L"sound", settings.soundEnabled ? 1 : 0) &&
            WriteIniInt(path_, L"capture", L"preview_timeout_ms", static_cast<int>(settings.previewTimeoutMs)) &&

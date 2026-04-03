@@ -27,6 +27,8 @@ private:
     RECT CurrentVisualBounds() const;
     void InvalidateVisualDelta();
     void UpdateWindowRegion();
+    void PresentNow();
+    void ConfigurePresentTimer(POINT screenPoint);
 
     HINSTANCE instance_{};
     HWND owner_{};
@@ -46,4 +48,7 @@ private:
     RECT lastVisualBounds_{};
     bool hasLastVisualBounds_{false};
     std::shared_ptr<ImageData> frozenFrame_;
+    UINT presentIntervalMs_{16};
+    bool pendingPresent_{false};
+    bool highResTimerEnabled_{false};
 };
