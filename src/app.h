@@ -27,6 +27,8 @@ private:
     void CreateTrayIcon();
     void RemoveTrayIcon();
     void ShowTrayMenu();
+    void StartShowSettingsListener();
+    void StopShowSettingsListener();
     bool RegisterAppHotkey(const HotkeyBinding& binding);
     bool RegisterKeyboardHook(const HotkeyBinding& binding);
     void UnregisterAppHotkey();
@@ -53,7 +55,9 @@ private:
     NOTIFYICONDATAW trayIcon_{};
     HICON trayIconHandle_{};
     HHOOK keyboardHook_{};
+    HANDLE showSettingsEvent_{};
     ULONG_PTR gdiplusToken_{};
+    std::thread showSettingsThread_;
     std::shared_ptr<ImageData> frozenFrame_;
     std::chrono::microseconds lastOverlayLatency_{};
     HotkeyBinding hookedBinding_{};
@@ -62,4 +66,5 @@ private:
     bool hookKeyDown_{false};
     bool hotkeyRegistered_{false};
     bool launchBackground_{false};
+    std::atomic<bool> shuttingDown_{false};
 };

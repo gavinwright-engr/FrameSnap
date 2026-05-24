@@ -39,9 +39,16 @@
 
 using Microsoft::WRL::ComPtr;
 
+inline constexpr wchar_t kFrameSnapAppName[] = L"FrameSnap";
+inline constexpr wchar_t kFrameSnapMainWindowClassName[] = L"FrameSnapMainWindow";
+inline constexpr wchar_t kFrameSnapSettingsWindowClassName[] = L"FrameSnapSettingsWindow";
+inline constexpr wchar_t kFrameSnapSingleInstanceMutexName[] = L"Local\\FrameSnap.SingleInstance";
+inline constexpr wchar_t kFrameSnapShowSettingsEventName[] = L"Local\\FrameSnap.ShowSettings";
+
 inline constexpr UINT WM_APP_CAPTURE_READY = WM_APP + 1;
 inline constexpr UINT WM_APP_PREVIEW_CLICKED = WM_APP + 2;
 inline constexpr UINT WM_APP_SETTINGS_APPLIED = WM_APP + 3;
 inline constexpr UINT WM_APP_COLOR_CHANGED = WM_APP + 4;
 inline constexpr UINT WM_APP_CAPTURE_CANCELLED = WM_APP + 5;
 inline constexpr UINT WM_APP_EXIT_REQUESTED = WM_APP + 6;
+inline constexpr UINT WM_APP_SHOW_SETTINGS = WM_APP + 7;

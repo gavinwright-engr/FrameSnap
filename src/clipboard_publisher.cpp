@@ -1,5 +1,19 @@
 #include "clipboard_publisher.h"
 
+namespace {
+
+bool OpenClipboardWithRetry() {
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        if (OpenClipboard(nullptr)) {
+            return true;
+        }
+        Sleep(8);
+    }
+    return false;
+}
+
+}  // namespace
+
 ClipboardPublisher::ClipboardPublisher() = default;
 
 ClipboardPublisher::~ClipboardPublisher() {
@@ -34,6 +48,9 @@ bool ClipboardPublisher::PublishBlocking(const std::shared_ptr<ImageData>& image
     auto request = std::make_shared<Request>();
     request->image = image;
     request->doneEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (request->doneEvent == nullptr) {
+        return false;
+    }
     {
         std::scoped_lock lock(mutex_);
         queue_.push(request);
@@ -45,8 +62,9 @@ bool ClipboardPublisher::PublishBlocking(const std::shared_ptr<ImageData>& image
 }
 
 void ClipboardPublisher::ThreadMain() {
-    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    while (running_) {
+    const HRESULT coInitializeResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const bool coInitialized = SUCCEEDED(coInitializeResult);
+    for (;;) {
         std::shared_ptr<Request> request;
         {
             std::unique_lock lock(mutex_);
@@ -60,7 +78,9 @@ void ClipboardPublisher::ThreadMain() {
         request->success = PublishNow(request->image);
         SetEvent(request->doneEvent);
     }
-    CoUninitialize();
+    if (coInitialized) {
+        CoUninitialize();
+    }
 }
 
 HGLOBAL ClipboardPublisher::CreateDibv5(const ImageData& image) const {
@@ -108,11 +128,14 @@ bool ClipboardPublisher::PublishNow(const std::shared_ptr<ImageData>& image) {
             if (void* data = GlobalLock(pngHandle)) {
                 memcpy(data, pngBytes.data(), pngBytes.size());
                 GlobalUnlock(pngHandle);
+            } else {
+                GlobalFree(pngHandle);
+                pngHandle = nullptr;
             }
         }
     }
 
-    if (!OpenClipboard(nullptr)) {
+    if (!OpenClipboardWithRetry()) {
         GlobalFree(dib);
         if (pngHandle != nullptr) {
             GlobalFree(pngHandle);
