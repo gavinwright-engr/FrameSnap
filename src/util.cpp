@@ -4,14 +4,25 @@ namespace util {
 
 namespace {
 
+constexpr std::array<const wchar_t*, 4> kStartupValueNames{
+    L"FrameSnap",
+    L"Screenshotter",
+    L"HotSnap",
+    L"OneShot",
+};
+
 struct GdiSnapshotCache {
     HDC memoryDc{};
     HBITMAP bitmap{};
+    HGDIOBJ previousBitmap{};
     void* bits{};
     int width{};
     int height{};
 
     ~GdiSnapshotCache() {
+        if (memoryDc != nullptr && previousBitmap != nullptr) {
+            SelectObject(memoryDc, previousBitmap);
+        }
         if (bitmap != nullptr) {
             DeleteObject(bitmap);
         }
@@ -39,6 +50,9 @@ bool EnsureSnapshotCache(HDC screenDc, int width, int height, GdiSnapshotCache& 
     }
 
     if (cache.bitmap != nullptr) {
+        if (cache.previousBitmap != nullptr) {
+            SelectObject(cache.memoryDc, cache.previousBitmap);
+        }
         DeleteObject(cache.bitmap);
         cache.bitmap = nullptr;
         cache.bits = nullptr;
@@ -66,7 +80,18 @@ bool EnsureSnapshotCache(HDC screenDc, int width, int height, GdiSnapshotCache& 
         return false;
     }
 
-    SelectObject(cache.memoryDc, cache.bitmap);
+    const HGDIOBJ oldBitmap = SelectObject(cache.memoryDc, cache.bitmap);
+    if (oldBitmap == nullptr || oldBitmap == HGDI_ERROR) {
+        DeleteObject(cache.bitmap);
+        cache.bitmap = nullptr;
+        cache.bits = nullptr;
+        cache.width = 0;
+        cache.height = 0;
+        return false;
+    }
+    if (cache.previousBitmap == nullptr) {
+        cache.previousBitmap = oldBitmap;
+    }
     return true;
 }
 
@@ -343,6 +368,30 @@ void WriteMetricsLog(const CaptureMetrics& metrics, const ImageData& image) {
            << L"\n";
 }
 
+bool IsRunAtStartupEnabled() {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            0,
+            KEY_QUERY_VALUE,
+            &key) != ERROR_SUCCESS) {
+        return false;
+    }
+
+    DWORD type = 0;
+    DWORD size = 0;
+    const LONG result = RegGetValueW(
+        key,
+        nullptr,
+        kStartupValueNames.front(),
+        RRF_RT_REG_SZ,
+        &type,
+        nullptr,
+        &size);
+    RegCloseKey(key);
+    return result == ERROR_SUCCESS && type == REG_SZ && size > sizeof(wchar_t);
+}
+
 bool SetRunAtStartup(bool enabled, bool backgroundLaunch) {
     HKEY key = nullptr;
     if (RegCreateKeyExW(HKEY_CURRENT_USER,
@@ -360,6 +409,9 @@ bool SetRunAtStartup(bool enabled, bool backgroundLaunch) {
     wchar_t exePath[MAX_PATH]{};
     GetModuleFileNameW(nullptr, exePath, MAX_PATH);
     bool success = false;
+    for (const wchar_t* valueName : kStartupValueNames) {
+        RegDeleteValueW(key, valueName);
+    }
     if (enabled) {
         std::wstring command = L"\"";
         command += exePath;
@@ -374,7 +426,7 @@ bool SetRunAtStartup(bool enabled, bool backgroundLaunch) {
                       reinterpret_cast<const BYTE*>(command.c_str()),
                       static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
     } else {
-        success = RegDeleteValueW(key, L"FrameSnap") == ERROR_SUCCESS || GetLastError() == ERROR_FILE_NOT_FOUND;
+        success = true;
     }
     RegCloseKey(key);
     return success;

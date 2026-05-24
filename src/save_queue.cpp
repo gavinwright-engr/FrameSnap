@@ -24,13 +24,16 @@ void SaveQueue::Stop() {
 }
 
 bool SaveQueue::Enqueue(const SaveJob& job) {
+    if (job.image == nullptr) {
+        return false;
+    }
     if (!running_) {
         Start();
     }
-    const auto bytes = job.image != nullptr ? job.image->pixels.size() : 0U;
+    const auto bytes = job.image->pixels.size();
     {
         std::scoped_lock lock(mutex_);
-        if (queuedBytes_ + bytes > kMaxQueuedBytes) {
+        if (bytes > kMaxQueuedBytes || queuedBytes_ > kMaxQueuedBytes - bytes) {
             if (!warned_.exchange(true)) {
                 MessageBeep(MB_ICONWARNING);
             }
@@ -44,8 +47,9 @@ bool SaveQueue::Enqueue(const SaveJob& job) {
 }
 
 void SaveQueue::ThreadMain() {
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    while (running_) {
+    const HRESULT coInitializeResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool coInitialized = SUCCEEDED(coInitializeResult);
+    for (;;) {
         SaveJob job;
         {
             std::unique_lock lock(mutex_);
@@ -63,5 +67,7 @@ void SaveQueue::ThreadMain() {
             imageIo_.SavePng(*job.image, job.path);
         }
     }
-    CoUninitialize();
+    if (coInitialized) {
+        CoUninitialize();
+    }
 }

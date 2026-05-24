@@ -21,6 +21,7 @@ private:
     void ApplyFonts();
     void ApplyWindowChrome() const;
     void LayoutControls();
+    void ResetWindowHandles();
     void LoadSettings(const AppSettings& settings);
     AppSettings ReadSettings() const;
     void BrowseForFolder();
@@ -33,6 +34,7 @@ private:
     void StopRecordingHook();
     HBRUSH BrushForControl(HWND control) const;
     void DrawActionButton(const DRAWITEMSTRUCT& drawItem) const;
+    void DrawCheckbox(const DRAWITEMSTRUCT& drawItem) const;
     static HFONT CreateUiFont(int height, int weight);
     static UINT CurrentModifierFlags(UINT activeKey = 0);
     static bool IsModifierKey(UINT virtualKey);

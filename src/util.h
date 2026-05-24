@@ -23,6 +23,7 @@ std::shared_ptr<ImageData> CaptureScreenSnapshotGdi(const RECT& bounds);
 std::shared_ptr<ImageData> CropImage(const std::shared_ptr<ImageData>& image, const RECT& selection);
 HICON CreateFrameSnapAppIcon(int size);
 void WriteMetricsLog(const CaptureMetrics& metrics, const ImageData& image);
+bool IsRunAtStartupEnabled();
 bool SetRunAtStartup(bool enabled, bool backgroundLaunch = true);
 bool IsPrintScreenSnippingEnabled();
 bool SetPrintScreenSnippingEnabled(bool enabled);

@@ -6,8 +6,6 @@
 
 namespace {
 
-constexpr wchar_t kMainClassName[] = L"FrameSnapMainWindow";
-constexpr wchar_t kAppName[] = L"FrameSnap";
 constexpr UINT kTrayMessage = WM_APP + 20;
 constexpr UINT kHotkeyId = 1;
 
@@ -363,6 +361,7 @@ FrameSnapApp::FrameSnapApp(HINSTANCE instance, bool launchBackground)
       launchBackground_(launchBackground) {}
 
 FrameSnapApp::~FrameSnapApp() {
+    StopShowSettingsListener();
     settingsStore_.Save(settings_);
     RemoveTrayIcon();
     if (trayIconHandle_ != nullptr) {
@@ -409,6 +408,7 @@ bool FrameSnapApp::Initialize() {
         return false;
     }
     AppendStartupLog(L"Initialize: main window created");
+    StartShowSettingsListener();
 
     overlay_ = std::make_unique<OverlayWindow>(instance_, hwnd_);
     preview_ = std::make_unique<PreviewWindow>(instance_, hwnd_);
@@ -431,15 +431,13 @@ bool FrameSnapApp::Initialize() {
     }
     CreateTrayIcon();
     AppendStartupLog(L"Initialize: tray icon created");
-    if (settingsWindow_ != nullptr) {
-        settingsWindow_->Show(settings_, BuildHotkeyStatusText(), BuildPrintScreenStatusText(),
-            launchBackground_ ? SW_SHOWMINNOACTIVE : SW_SHOWNORMAL);
+    if (settingsWindow_ != nullptr && (!launchBackground_ || !hotkeyRegistered_)) {
+        settingsWindow_->Show(settings_, BuildHotkeyStatusText(), BuildPrintScreenStatusText(), SW_SHOWNORMAL);
     }
     if (!hotkeyRegistered_) {
-        settingsWindow_->Show(settings_, BuildHotkeyStatusText(), BuildPrintScreenStatusText(), SW_SHOWNORMAL);
         const std::wstring message = L"FrameSnap couldn't register " + util::HotkeyLabel(settings_.hotkey) +
                                      L" because Windows or another app is already using it.\n\nRecord a different shortcut in Settings.";
-        MessageBoxW(hwnd_, message.c_str(), kAppName, MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(hwnd_, message.c_str(), kFrameSnapAppName, MB_OK | MB_ICONINFORMATION);
     }
     return true;
 }
@@ -461,7 +459,7 @@ bool FrameSnapApp::CreateMainWindow() {
     wc.lpfnWndProc = FrameSnapApp::WndProc;
     wc.hInstance = instance_;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.lpszClassName = kMainClassName;
+    wc.lpszClassName = kFrameSnapMainWindowClassName;
     if (RegisterClassW(&wc) == 0) {
         const DWORD error = GetLastError();
         AppendStartupLog(L"CreateMainWindow: RegisterClassW failed " + std::to_wstring(error));
@@ -470,8 +468,8 @@ bool FrameSnapApp::CreateMainWindow() {
 
     hwnd_ = CreateWindowExW(
         0,
-        kMainClassName,
-        kAppName,
+        kFrameSnapMainWindowClassName,
+        kFrameSnapAppName,
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
@@ -501,7 +499,7 @@ void FrameSnapApp::CreateTrayIcon() {
         trayIconHandle_ = CreateFrameSnapTrayIcon();
     }
     trayIcon_.hIcon = trayIconHandle_ != nullptr ? trayIconHandle_ : LoadIconW(nullptr, IDI_APPLICATION);
-    wcscpy_s(trayIcon_.szTip, kAppName);
+    wcscpy_s(trayIcon_.szTip, kFrameSnapAppName);
     Shell_NotifyIconW(NIM_DELETE, &trayIcon_);
     if (Shell_NotifyIconW(NIM_ADD, &trayIcon_)) {
         trayIcon_.uVersion = NOTIFYICON_VERSION_4;
@@ -529,6 +527,40 @@ void FrameSnapApp::ShowTrayMenu() {
     SetForegroundWindow(hwnd_);
     TrackPopupMenu(menu, TPM_RIGHTBUTTON, point.x, point.y, 0, hwnd_, nullptr);
     DestroyMenu(menu);
+}
+
+void FrameSnapApp::StartShowSettingsListener() {
+    if (showSettingsEvent_ != nullptr) {
+        return;
+    }
+    showSettingsEvent_ = CreateEventW(nullptr, FALSE, FALSE, kFrameSnapShowSettingsEventName);
+    if (showSettingsEvent_ == nullptr) {
+        AppendStartupLog(L"ShowSettingsListener: CreateEventW failed " + std::to_wstring(GetLastError()));
+        return;
+    }
+    showSettingsThread_ = std::thread([this] {
+        for (;;) {
+            const DWORD result = WaitForSingleObject(showSettingsEvent_, INFINITE);
+            if (result != WAIT_OBJECT_0 || shuttingDown_) {
+                break;
+            }
+            PostMessageW(hwnd_, WM_APP_SHOW_SETTINGS, 0, 0);
+        }
+    });
+}
+
+void FrameSnapApp::StopShowSettingsListener() {
+    shuttingDown_ = true;
+    if (showSettingsEvent_ != nullptr) {
+        SetEvent(showSettingsEvent_);
+    }
+    if (showSettingsThread_.joinable()) {
+        showSettingsThread_.join();
+    }
+    if (showSettingsEvent_ != nullptr) {
+        CloseHandle(showSettingsEvent_);
+        showSettingsEvent_ = nullptr;
+    }
 }
 
 bool FrameSnapApp::RegisterAppHotkey(const HotkeyBinding& binding) {
@@ -604,10 +636,25 @@ std::wstring FrameSnapApp::BuildPrintScreenStatusText() const {
 }
 
 void FrameSnapApp::ExitApplication() {
-    if (settingsWindow_ != nullptr && settingsWindow_->Handle() != nullptr) {
+    if (shuttingDown_.exchange(true)) {
+        return;
+    }
+    frozenFrame_.reset();
+    if (overlay_ != nullptr) {
+        overlay_->Cancel();
+    }
+    if (preview_ != nullptr) {
+        preview_->Hide();
+    }
+    RemoveTrayIcon();
+    if (settingsWindow_ != nullptr && settingsWindow_->Handle() != nullptr && IsWindow(settingsWindow_->Handle())) {
         DestroyWindow(settingsWindow_->Handle());
     }
-    DestroyWindow(hwnd_);
+    if (hwnd_ != nullptr && IsWindow(hwnd_)) {
+        DestroyWindow(hwnd_);
+    } else {
+        PostQuitMessage(0);
+    }
 }
 
 bool FrameSnapApp::HandleLowLevelKeyboard(WPARAM wParam, const KBDLLHOOKSTRUCT& info) {
@@ -711,7 +758,7 @@ void FrameSnapApp::ApplySettings(const AppSettings& settings) {
     if (!util::SetPrintScreenSnippingEnabled(!merged.printScreenOverrideEnabled)) {
         MessageBoxW(hwnd_,
             L"FrameSnap couldn't update the Windows Print Screen override setting.",
-            kAppName,
+            kFrameSnapAppName,
             MB_OK | MB_ICONWARNING);
         if (settingsWindow_ != nullptr) {
             settingsWindow_->UpdateStatus(BuildHotkeyStatusText(), BuildPrintScreenStatusText());
@@ -722,7 +769,7 @@ void FrameSnapApp::ApplySettings(const AppSettings& settings) {
         hotkeyRegistered_ = RegisterAppHotkey(settings_.hotkey);
         const std::wstring message = L"FrameSnap couldn't register " + util::HotkeyLabel(merged.hotkey) +
                                      L". It is likely already in use or unsupported.";
-        MessageBoxW(hwnd_, message.c_str(), kAppName, MB_OK | MB_ICONWARNING);
+        MessageBoxW(hwnd_, message.c_str(), kFrameSnapAppName, MB_OK | MB_ICONWARNING);
         if (settingsWindow_ != nullptr) {
             settingsWindow_->UpdateStatus(BuildHotkeyStatusText(), BuildPrintScreenStatusText());
         }
@@ -768,6 +815,17 @@ LRESULT FrameSnapApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     }
 
     switch (message) {
+    case WM_QUERYENDSESSION:
+        settingsStore_.Save(settings_);
+        return TRUE;
+    case WM_ENDSESSION:
+        if (wParam != 0) {
+            ExitApplication();
+        }
+        return 0;
+    case WM_CLOSE:
+        ExitApplication();
+        return 0;
     case WM_HOTKEY:
         BeginCapture();
         return 0;
@@ -810,6 +868,12 @@ LRESULT FrameSnapApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         ApplySettings(*settings);
         return 0;
     }
+    case WM_APP_SHOW_SETTINGS:
+        if (settingsWindow_ != nullptr) {
+            const int showCommand = wParam == 1 ? SW_SHOWMINNOACTIVE : SW_SHOWNORMAL;
+            settingsWindow_->Show(settings_, BuildHotkeyStatusText(), BuildPrintScreenStatusText(), showCommand);
+        }
+        return 0;
     case WM_APP_EXIT_REQUESTED:
         ExitApplication();
         return 0;
@@ -821,6 +885,7 @@ LRESULT FrameSnapApp::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         }
         return 0;
     case WM_DESTROY:
+        hwnd_ = nullptr;
         PostQuitMessage(0);
         return 0;
     default:

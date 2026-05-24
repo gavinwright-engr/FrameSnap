@@ -30,7 +30,8 @@ SettingsStore::SettingsStore()
 AppSettings SettingsStore::Load() const {
     AppSettings settings{};
     settings.saveFolder = util::DefaultSaveFolder().wstring();
-    settings.runAtStartupEnabled = ReadIniInt(path_, L"app", L"run_at_startup", 1) != 0;
+    settings.runAtStartupEnabled =
+        ReadIniInt(path_, L"app", L"run_at_startup", 0) != 0 && util::IsRunAtStartupEnabled();
     settings.printScreenOverrideEnabled = ReadIniInt(path_, L"app", L"print_screen_override", util::IsPrintScreenSnippingEnabled() ? 0 : 1) != 0;
     settings.autoSaveEnabled = ReadIniInt(path_, L"capture", L"auto_save", 1) != 0;
     settings.clickModeEnabled = ReadIniInt(path_, L"capture", L"click_mode", 1) != 0;

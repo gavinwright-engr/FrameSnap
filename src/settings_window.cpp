@@ -4,21 +4,20 @@
 
 namespace {
 
-constexpr wchar_t kSettingsClassName[] = L"FrameSnapSettingsWindow";
 constexpr wchar_t kWindowTitle[] = L"FrameSnap";
 
-constexpr int kWindowMinWidth = 980;
-constexpr int kWindowMinHeight = 700;
-constexpr int kWindowDefaultWidth = 1080;
-constexpr int kWindowDefaultHeight = 820;
+constexpr int kWindowMinWidth = 1080;
+constexpr int kWindowMinHeight = 820;
+constexpr int kWindowDefaultWidth = 1160;
+constexpr int kWindowDefaultHeight = 900;
 constexpr int kOuterPadding = 24;
 constexpr int kPanelGap = 18;
-constexpr int kHeaderHeight = 92;
-constexpr int kHotkeyPanelHeight = 250;
-constexpr int kSecondaryPanelHeight = 214;
-constexpr int kButtonHeight = 40;
+constexpr int kHeaderHeight = 88;
+constexpr int kHotkeyPanelHeight = 272;
+constexpr int kSecondaryPanelHeight = 232;
+constexpr int kButtonHeight = 42;
 constexpr int kFieldHeight = 36;
-constexpr int kPanelRadius = 22;
+constexpr int kPanelRadius = 14;
 
 constexpr COLORREF kWindowColor = RGB(10, 14, 20);
 constexpr COLORREF kHeaderColor = RGB(14, 19, 26);
@@ -80,6 +79,14 @@ void DrawRoundedCard(HDC hdc, const RECT& rect, COLORREF fill, COLORREF border, 
     DeleteObject(pen);
 }
 
+bool IsCheckboxControlId(UINT controlId) {
+    return controlId == ControlAutoSave ||
+           controlId == ControlClickMode ||
+           controlId == ControlSound ||
+           controlId == ControlStartup ||
+           controlId == ControlPrintScreenOverride;
+}
+
 }  // namespace
 
 SettingsWindow::SettingsWindow(HINSTANCE instance, HWND owner)
@@ -105,6 +112,33 @@ SettingsWindow::~SettingsWindow() {
     if (fieldBrush_ != nullptr) {
         DeleteObject(fieldBrush_);
     }
+}
+
+void SettingsWindow::ResetWindowHandles() {
+    hwnd_ = nullptr;
+    autoSaveCheckbox_ = nullptr;
+    clickModeCheckbox_ = nullptr;
+    soundCheckbox_ = nullptr;
+    startupCheckbox_ = nullptr;
+    printScreenOverrideCheckbox_ = nullptr;
+    folderEdit_ = nullptr;
+    browseButton_ = nullptr;
+    hotkeyPreview_ = nullptr;
+    recordHotkeyButton_ = nullptr;
+    hotkeyHint_ = nullptr;
+    hotkeyStatus_ = nullptr;
+    printScreenStatus_ = nullptr;
+    hotkeyNote_ = nullptr;
+    appModeHint_ = nullptr;
+    idleHint_ = nullptr;
+    previewEdit_ = nullptr;
+    thresholdEdit_ = nullptr;
+    saveButton_ = nullptr;
+    exitButton_ = nullptr;
+    hotkeyPanelRect_ = {};
+    capturePanelRect_ = {};
+    storagePanelRect_ = {};
+    appPanelRect_ = {};
 }
 
 HFONT SettingsWindow::CreateUiFont(int height, int weight) {
@@ -200,8 +234,11 @@ void SettingsWindow::ApplyWindowChrome() const {
 }
 
 bool SettingsWindow::EnsureWindow() {
-    if (hwnd_ != nullptr) {
+    if (hwnd_ != nullptr && IsWindow(hwnd_)) {
         return true;
+    }
+    if (hwnd_ != nullptr) {
+        ResetWindowHandles();
     }
 
     WNDCLASSW wc{};
@@ -209,19 +246,31 @@ bool SettingsWindow::EnsureWindow() {
     wc.hInstance = instance_;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = nullptr;
-    wc.lpszClassName = kSettingsClassName;
+    wc.lpszClassName = kFrameSnapSettingsWindowClassName;
     RegisterClassW(&wc);
 
-    windowBrush_ = CreateSolidBrush(kWindowColor);
-    panelBrush_ = CreateSolidBrush(kPanelColor);
-    fieldBrush_ = CreateSolidBrush(kFieldColor);
-    uiFont_ = CreateUiFont(17, FW_MEDIUM);
-    titleFont_ = CreateUiFont(28, FW_SEMIBOLD);
-    hintFont_ = CreateUiFont(14, FW_NORMAL);
+    if (windowBrush_ == nullptr) {
+        windowBrush_ = CreateSolidBrush(kWindowColor);
+    }
+    if (panelBrush_ == nullptr) {
+        panelBrush_ = CreateSolidBrush(kPanelColor);
+    }
+    if (fieldBrush_ == nullptr) {
+        fieldBrush_ = CreateSolidBrush(kFieldColor);
+    }
+    if (uiFont_ == nullptr) {
+        uiFont_ = CreateUiFont(17, FW_MEDIUM);
+    }
+    if (titleFont_ == nullptr) {
+        titleFont_ = CreateUiFont(28, FW_SEMIBOLD);
+    }
+    if (hintFont_ == nullptr) {
+        hintFont_ = CreateUiFont(14, FW_NORMAL);
+    }
 
     hwnd_ = CreateWindowExW(
-        0,
-        kSettingsClassName,
+        WS_EX_APPWINDOW,
+        kFrameSnapSettingsWindowClassName,
         kWindowTitle,
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
         CW_USEDEFAULT,
@@ -262,7 +311,7 @@ void SettingsWindow::CreateControls() {
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlRecordHotkey), instance_, nullptr);
 
     printScreenOverrideCheckbox_ = CreateWindowW(L"BUTTON", L"Let FrameSnap own Print Screen",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_OWNERDRAW,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlPrintScreenOverride), instance_, nullptr);
 
     printScreenStatus_ = CreateWindowW(L"STATIC", L"",
@@ -275,11 +324,11 @@ void SettingsWindow::CreateControls() {
         0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
 
     clickModeCheckbox_ = CreateWindowW(L"BUTTON", L"Click-click rectangle mode",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_OWNERDRAW,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlClickMode), instance_, nullptr);
 
     soundCheckbox_ = CreateWindowW(L"BUTTON", L"Play capture sounds",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_OWNERDRAW,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlSound), instance_, nullptr);
 
     previewEdit_ = CreateWindowW(L"EDIT", L"",
@@ -291,7 +340,7 @@ void SettingsWindow::CreateControls() {
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlThresholdEdit), instance_, nullptr);
 
     autoSaveCheckbox_ = CreateWindowW(L"BUTTON", L"Auto-save every capture",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_OWNERDRAW,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlAutoSave), instance_, nullptr);
 
     folderEdit_ = CreateWindowW(L"EDIT", L"",
@@ -303,16 +352,16 @@ void SettingsWindow::CreateControls() {
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlFolderBrowse), instance_, nullptr);
 
     startupCheckbox_ = CreateWindowW(L"BUTTON", L"Start FrameSnap when I sign in",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_OWNERDRAW,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlStartup), instance_, nullptr);
 
     appModeHint_ = CreateWindowW(L"STATIC",
-        L"Manual launch opens the shell. Windows startup launches minimized. Closing the window minimizes it; use Exit FrameSnap to fully quit.",
+        L"Manual launch opens this window. Startup is off unless you enable it here.",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
 
     idleHint_ = CreateWindowW(L"STATIC",
-        L"To stay ready on a hotkey, FrameSnap keeps one background process alive. Idle work is event-driven only: the save thread and clipboard thread sleep until needed, and the frozen frame is released immediately on cancel.",
+        L"Close exits FrameSnap. Minimize keeps it ready in the background.",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
 
@@ -362,38 +411,38 @@ void SettingsWindow::LayoutControls() {
     capturePanelRect_ = RectWithSize(kOuterPadding, hotkeyPanelRect_.bottom + kPanelGap, columnWidth, kSecondaryPanelHeight);
     storagePanelRect_ = RectWithSize(capturePanelRect_.right + kPanelGap, capturePanelRect_.top, contentWidth - columnWidth - kPanelGap, kSecondaryPanelHeight);
     appPanelRect_ = RectWithSize(kOuterPadding, capturePanelRect_.bottom + kPanelGap, contentWidth,
-        std::max<LONG>(140, client.bottom - capturePanelRect_.bottom - kPanelGap - kOuterPadding));
+        std::max<LONG>(190, client.bottom - capturePanelRect_.bottom - kPanelGap - kOuterPadding));
 
     const int panelPadding = 20;
-    const int hotkeyContentTop = hotkeyPanelRect_.top + 54;
+    const int hotkeyContentTop = hotkeyPanelRect_.top + 70;
     const int recordButtonWidth = 160;
     const int previewWidth = std::max(220L, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 3 - recordButtonWidth);
-    MoveWindow(hotkeyHint_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop - 26, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 22, TRUE);
-    MoveWindow(hotkeyPreview_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 6, previewWidth, kFieldHeight, TRUE);
-    MoveWindow(recordHotkeyButton_, hotkeyPanelRect_.right - panelPadding - recordButtonWidth, hotkeyContentTop + 4, recordButtonWidth, kButtonHeight, TRUE);
-    MoveWindow(hotkeyStatus_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 48, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 22, TRUE);
-    MoveWindow(printScreenOverrideCheckbox_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 82, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 26, TRUE);
-    MoveWindow(printScreenStatus_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 110, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 22, TRUE);
-    MoveWindow(hotkeyNote_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 136, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 58, TRUE);
+    MoveWindow(hotkeyHint_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop - 30, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 24, TRUE);
+    MoveWindow(hotkeyPreview_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 2, previewWidth, kFieldHeight, TRUE);
+    MoveWindow(recordHotkeyButton_, hotkeyPanelRect_.right - panelPadding - recordButtonWidth, hotkeyContentTop, recordButtonWidth, kButtonHeight, TRUE);
+    MoveWindow(hotkeyStatus_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 48, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 24, TRUE);
+    MoveWindow(printScreenOverrideCheckbox_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 84, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 30, TRUE);
+    MoveWindow(printScreenStatus_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 120, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 24, TRUE);
+    MoveWindow(hotkeyNote_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 150, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 56, TRUE);
 
-    const int captureContentTop = capturePanelRect_.top + 56;
+    const int captureContentTop = capturePanelRect_.top + 64;
     const int fieldWidth = std::max(120L, (capturePanelRect_.right - capturePanelRect_.left - panelPadding * 2 - 16) / 2);
-    MoveWindow(clickModeCheckbox_, capturePanelRect_.left + panelPadding, captureContentTop, capturePanelRect_.right - capturePanelRect_.left - panelPadding * 2, 26, TRUE);
-    MoveWindow(soundCheckbox_, capturePanelRect_.left + panelPadding, captureContentTop + 34, capturePanelRect_.right - capturePanelRect_.left - panelPadding * 2, 26, TRUE);
-    MoveWindow(previewEdit_, capturePanelRect_.left + panelPadding, captureContentTop + 112, fieldWidth, kFieldHeight, TRUE);
-    MoveWindow(thresholdEdit_, capturePanelRect_.left + panelPadding + fieldWidth + 16, captureContentTop + 112, fieldWidth, kFieldHeight, TRUE);
+    MoveWindow(clickModeCheckbox_, capturePanelRect_.left + panelPadding, captureContentTop, capturePanelRect_.right - capturePanelRect_.left - panelPadding * 2, 30, TRUE);
+    MoveWindow(soundCheckbox_, capturePanelRect_.left + panelPadding, captureContentTop + 38, capturePanelRect_.right - capturePanelRect_.left - panelPadding * 2, 30, TRUE);
+    MoveWindow(previewEdit_, capturePanelRect_.left + panelPadding, captureContentTop + 120, fieldWidth, kFieldHeight, TRUE);
+    MoveWindow(thresholdEdit_, capturePanelRect_.left + panelPadding + fieldWidth + 16, captureContentTop + 120, fieldWidth, kFieldHeight, TRUE);
 
-    const int storageContentTop = storagePanelRect_.top + 56;
+    const int storageContentTop = storagePanelRect_.top + 64;
     const int browseWidth = 120;
     const int folderWidth = std::max(180L, storagePanelRect_.right - storagePanelRect_.left - panelPadding * 2 - browseWidth - 12);
-    MoveWindow(autoSaveCheckbox_, storagePanelRect_.left + panelPadding, storageContentTop, storagePanelRect_.right - storagePanelRect_.left - panelPadding * 2, 26, TRUE);
-    MoveWindow(folderEdit_, storagePanelRect_.left + panelPadding, storageContentTop + 112, folderWidth, kFieldHeight, TRUE);
-    MoveWindow(browseButton_, storagePanelRect_.left + panelPadding + folderWidth + 12, storageContentTop + 110, browseWidth, kButtonHeight, TRUE);
+    MoveWindow(autoSaveCheckbox_, storagePanelRect_.left + panelPadding, storageContentTop, storagePanelRect_.right - storagePanelRect_.left - panelPadding * 2, 30, TRUE);
+    MoveWindow(folderEdit_, storagePanelRect_.left + panelPadding, storageContentTop + 120, folderWidth, kFieldHeight, TRUE);
+    MoveWindow(browseButton_, storagePanelRect_.left + panelPadding + folderWidth + 12, storageContentTop + 118, browseWidth, kButtonHeight, TRUE);
 
-    const int appContentTop = appPanelRect_.top + 54;
-    MoveWindow(startupCheckbox_, appPanelRect_.left + panelPadding, appContentTop, appPanelRect_.right - appPanelRect_.left - panelPadding * 2, 28, TRUE);
-    MoveWindow(appModeHint_, appPanelRect_.left + panelPadding, appContentTop + 34, appPanelRect_.right - appPanelRect_.left - panelPadding * 2, 38, TRUE);
-    MoveWindow(idleHint_, appPanelRect_.left + panelPadding, appContentTop + 78, appPanelRect_.right - appPanelRect_.left - panelPadding * 2, 52, TRUE);
+    const int appContentTop = appPanelRect_.top + 62;
+    MoveWindow(startupCheckbox_, appPanelRect_.left + panelPadding, appContentTop, appPanelRect_.right - appPanelRect_.left - panelPadding * 2, 30, TRUE);
+    MoveWindow(appModeHint_, appPanelRect_.left + panelPadding, appContentTop + 42, appPanelRect_.right - appPanelRect_.left - panelPadding * 2, 42, TRUE);
+    MoveWindow(idleHint_, appPanelRect_.left + panelPadding, appContentTop + 92, appPanelRect_.right - appPanelRect_.left - panelPadding * 2 - 360, 54, TRUE);
     MoveWindow(exitButton_, appPanelRect_.right - panelPadding - 340, appPanelRect_.bottom - panelPadding - kButtonHeight, 160, kButtonHeight, TRUE);
     MoveWindow(saveButton_, appPanelRect_.right - panelPadding - 160, appPanelRect_.bottom - panelPadding - kButtonHeight, 160, kButtonHeight, TRUE);
 }
@@ -597,14 +646,72 @@ void SettingsWindow::DrawActionButton(const DRAWITEMSTRUCT& drawItem) const {
     DrawTextW(drawItem.hDC, label.c_str(), -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
+void SettingsWindow::DrawCheckbox(const DRAWITEMSTRUCT& drawItem) const {
+    const bool checked = SendMessageW(drawItem.hwndItem, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    const bool pressed = (drawItem.itemState & ODS_SELECTED) != 0;
+    const bool focused = (drawItem.itemState & ODS_FOCUS) != 0;
+    const bool disabled = (drawItem.itemState & ODS_DISABLED) != 0;
+
+    FillSolidRect(drawItem.hDC, drawItem.rcItem, kPanelColor);
+
+    const int boxSize = 18;
+    const int boxLeft = drawItem.rcItem.left;
+    const int boxTop = drawItem.rcItem.top + ((drawItem.rcItem.bottom - drawItem.rcItem.top - boxSize) / 2);
+    const RECT boxRect = RectWithSize(boxLeft, boxTop, boxSize, boxSize);
+
+    COLORREF fill = checked ? kAccentColor : kFieldColor;
+    COLORREF border = checked ? kAccentBorderColor : kFieldBorderColor;
+    if (pressed) {
+        fill = checked ? kAccentPressedColor : RGB(24, 31, 42);
+    }
+    if (disabled) {
+        fill = RGB(24, 31, 42);
+        border = RGB(42, 52, 68);
+    }
+
+    HBRUSH boxBrush = CreateSolidBrush(fill);
+    HPEN boxPen = CreatePen(PS_SOLID, focused ? 2 : 1, border);
+    HGDIOBJ oldBrush = SelectObject(drawItem.hDC, boxBrush);
+    HGDIOBJ oldPen = SelectObject(drawItem.hDC, boxPen);
+    RoundRect(drawItem.hDC, boxRect.left, boxRect.top, boxRect.right, boxRect.bottom, 5, 5);
+    SelectObject(drawItem.hDC, oldBrush);
+    SelectObject(drawItem.hDC, oldPen);
+    DeleteObject(boxBrush);
+    DeleteObject(boxPen);
+
+    if (checked) {
+        HPEN checkPen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+        HGDIOBJ oldCheckPen = SelectObject(drawItem.hDC, checkPen);
+        MoveToEx(drawItem.hDC, boxLeft + 4, boxTop + 9, nullptr);
+        LineTo(drawItem.hDC, boxLeft + 8, boxTop + 13);
+        LineTo(drawItem.hDC, boxLeft + 14, boxTop + 5);
+        SelectObject(drawItem.hDC, oldCheckPen);
+        DeleteObject(checkPen);
+    }
+
+    SetBkMode(drawItem.hDC, TRANSPARENT);
+    SetTextColor(drawItem.hDC, disabled ? kMutedColor : kBodyColor);
+    SelectObject(drawItem.hDC, uiFont_);
+    RECT textRect = drawItem.rcItem;
+    textRect.left += boxSize + 8;
+    const std::wstring label = ReadWindowText(drawItem.hwndItem);
+    DrawTextW(drawItem.hDC, label.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
 void SettingsWindow::Show(const AppSettings& settings, const std::wstring& hotkeyStatus, const std::wstring& printScreenStatus, int showCommand) {
     if (!EnsureWindow()) {
         return;
     }
     LoadSettings(settings);
     UpdateStatus(hotkeyStatus, printScreenStatus);
-    ShowWindow(hwnd_, showCommand);
+    if (showCommand == SW_SHOWNORMAL && IsIconic(hwnd_)) {
+        ShowWindow(hwnd_, SW_RESTORE);
+    } else {
+        ShowWindow(hwnd_, showCommand);
+    }
+    UpdateWindow(hwnd_);
     if (showCommand != SW_SHOWMINNOACTIVE && showCommand != SW_SHOWMINIMIZED && showCommand != SW_MINIMIZE) {
+        BringWindowToTop(hwnd_);
         SetForegroundWindow(hwnd_);
     }
 }
@@ -637,6 +744,14 @@ LRESULT CALLBACK SettingsWindow::LowLevelKeyboardProc(int code, WPARAM wParam, L
 
 LRESULT SettingsWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
+    case WM_NCDESTROY: {
+        const HWND destroyedHwnd = hwnd_;
+        StopRecordingHook();
+        recordingHotkey_ = false;
+        ResetWindowHandles();
+        SetWindowLongPtrW(destroyedHwnd, GWLP_USERDATA, 0);
+        return DefWindowProcW(destroyedHwnd, message, wParam, lParam);
+    }
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
         info->ptMinTrackSize.x = kWindowMinWidth;
@@ -657,11 +772,16 @@ LRESULT SettingsWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam
         break;
     case WM_DRAWITEM: {
         auto* drawItem = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
-        if (drawItem != nullptr &&
-            (drawItem->CtlID == ControlRecordHotkey || drawItem->CtlID == ControlFolderBrowse || drawItem->CtlID == ControlSaveButton ||
-                drawItem->CtlID == ControlExitButton)) {
-            DrawActionButton(*drawItem);
-            return TRUE;
+        if (drawItem != nullptr) {
+            if (IsCheckboxControlId(drawItem->CtlID)) {
+                DrawCheckbox(*drawItem);
+                return TRUE;
+            }
+            if (drawItem->CtlID == ControlRecordHotkey || drawItem->CtlID == ControlFolderBrowse || drawItem->CtlID == ControlSaveButton ||
+                drawItem->CtlID == ControlExitButton) {
+                DrawActionButton(*drawItem);
+                return TRUE;
+            }
         }
         break;
     }
@@ -711,10 +831,10 @@ LRESULT SettingsWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam
 
         SelectObject(backDc, hintFont_);
         SetTextColor(backDc, kMutedColor);
-        RECT previewLabel = RectWithSize(capturePanelRect_.left + 20, capturePanelRect_.top + 146, 140, 18);
+        RECT previewLabel = RectWithSize(capturePanelRect_.left + 20, capturePanelRect_.top + 166, 140, 18);
         RECT thresholdLabel = RectWithSize(capturePanelRect_.left + 20 + ((capturePanelRect_.right - capturePanelRect_.left - 40 - 16) / 2) + 16,
-            capturePanelRect_.top + 146, 160, 18);
-        RECT folderLabel = RectWithSize(storagePanelRect_.left + 20, storagePanelRect_.top + 146, 180, 18);
+            capturePanelRect_.top + 166, 160, 18);
+        RECT folderLabel = RectWithSize(storagePanelRect_.left + 20, storagePanelRect_.top + 166, 180, 18);
         DrawTextW(backDc, L"Preview timeout (ms)", -1, &previewLabel, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         DrawTextW(backDc, L"Drag threshold (px)", -1, &thresholdLabel, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         DrawTextW(backDc, L"Save folder", -1, &folderLabel, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -751,6 +871,15 @@ LRESULT SettingsWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam
     }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
+        case ControlAutoSave:
+        case ControlClickMode:
+        case ControlSound:
+        case ControlStartup:
+        case ControlPrintScreenOverride:
+            if (reinterpret_cast<HWND>(lParam) != nullptr) {
+                InvalidateRect(reinterpret_cast<HWND>(lParam), nullptr, FALSE);
+            }
+            return 0;
         case ControlFolderBrowse:
             BrowseForFolder();
             return 0;
@@ -769,9 +898,21 @@ LRESULT SettingsWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam
             break;
         }
         break;
+    case WM_QUERYENDSESSION:
+        return TRUE;
+    case WM_ENDSESSION:
+        if (wParam != 0) {
+            PostMessageW(owner_, WM_APP_EXIT_REQUESTED, 0, 0);
+        }
+        return 0;
     case WM_CLOSE:
         SetRecordingHotkey(false);
-        ShowWindow(hwnd_, SW_MINIMIZE);
+        PostMessageW(owner_, WM_APP_EXIT_REQUESTED, 0, 0);
+        return 0;
+    case WM_APP_SHOW_SETTINGS:
+        ShowWindow(hwnd_, IsIconic(hwnd_) ? SW_RESTORE : SW_SHOWNORMAL);
+        BringWindowToTop(hwnd_);
+        SetForegroundWindow(hwnd_);
         return 0;
     default:
         break;
