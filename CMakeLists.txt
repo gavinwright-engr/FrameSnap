@@ -40,10 +40,14 @@ add_executable(FrameSnap WIN32
     src/settings_store.cpp src/settings_window.cpp src/util.cpp)
 framesnap_windows_target(FrameSnap)
 target_include_directories(FrameSnap PRIVATE resources)
-if(MINGW)
+if(MSVC)
+    # Let the linker merge our manifest with its generated manifest, then embed
+    # it once. Compiling it into app.rc too creates duplicate resource ID 1.
+    target_sources(FrameSnap PRIVATE resources/app.manifest)
+    target_compile_definitions(FrameSnap PRIVATE FRAMESNAP_LINKER_MANIFEST)
+elseif(MINGW)
     target_link_options(FrameSnap PRIVATE -municode)
 endif()
-set_target_properties(FrameSnap PROPERTIES VS_GLOBAL_DpiAwareness "PerMonitorV2")
 
 if(BUILD_TESTING)
     if(MINGW)
