@@ -34,7 +34,9 @@ try {
     $shell = New-Object -ComObject WScript.Shell
     $capture = $shell.CreateShortcut((Join-Path $programs 'Capture.lnk'))
     Assert-True ($capture.TargetPath -eq $target -and $capture.Arguments -eq '--capture') 'Capture shortcut launches one-shot mode'
-    Assert-True ($capture.Hotkey -ieq 'Ctrl+Alt+S') 'Explorer owns the on-demand hotkey'
+    # WScript.Shell can return the modifiers in a different order than assigned.
+    $hotkeyParts = ($capture.Hotkey -split '\+' | Sort-Object) -join '+'
+    Assert-True ($hotkeyParts -ieq 'Alt+Ctrl+S') "Explorer shortcut stores Ctrl+Alt+S (reported: $($capture.Hotkey))"
     $userFile = Join-Path $installDir 'user-notes.txt'
     Set-Content -LiteralPath $userFile -Value 'Keep this user-created file'
     & (Join-Path $stage 'Install.ps1')
@@ -62,6 +64,13 @@ try {
     if ($hadSettings) { Assert-True (Test-Path -LiteralPath $settings) 'Uninstall preserves settings' }
     Remove-Item -LiteralPath $userFile
     if (-not (Get-ChildItem -LiteralPath $installDir -Force)) { Remove-Item -LiteralPath $installDir }
+} catch {
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        $details = ($_ | Out-String).Trim() + "`n" + $_.ScriptStackTrace
+        $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+        Write-Host "::error title=Installer test failed::$details"
+    }
+    throw
 } finally {
     # Cleanup is restricted to resources created by this test in its disposable profile.
     if (Test-Path -LiteralPath (Join-Path $installDir 'Uninstall.ps1')) {
