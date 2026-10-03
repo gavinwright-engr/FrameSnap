@@ -173,7 +173,21 @@ struct Process {
         return hwnd;
     }
     void Exited() const {
-        CHECK(Until([&] { return WaitForSingleObject(info.hProcess, 0) == WAIT_OBJECT_0; }, 10000));
+        const bool stopped = Until([&] { return WaitForSingleObject(info.hProcess, 0) == WAIT_OBJECT_0; }, 10000);
+        if (!stopped) {
+            std::wcerr << L"Process did not exit: " << arguments_ << L"; popup menu visible="
+                << (Window(L"#32768", true) != nullptr) << L"\n";
+            const auto desktopName = [](HDESK desktop) {
+                wchar_t name[256]{};
+                return desktop != nullptr && GetUserObjectInformationW(desktop, UOI_NAME, name, sizeof(name), nullptr)
+                    ? std::wstring(name) : std::wstring(L"unavailable");
+            };
+            HDESK input = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+            std::wcerr << L"Thread desktop=" << desktopName(GetThreadDesktop(GetCurrentThreadId()))
+                << L"; input desktop=" << desktopName(input) << L"\n";
+            if (input != nullptr) CloseDesktop(input);
+        }
+        CHECK(stopped);
         DWORD code = 99;
         CHECK(GetExitCodeProcess(info.hProcess, &code));
         if (code != 0) std::wcerr << L"Process " << info.dwProcessId << L" (" << arguments_ << L") exit=" << code << L"\n";
@@ -302,20 +316,26 @@ void Lifecycle(const std::wstring& executable) {
             << (ticks(kernelAfter) + ticks(userAfter) - ticks(kernelBefore) - ticks(userBefore)) / 10000.0
             << " ms CPU over 1500 ms\n";
         PostMessageW(main, WM_APP + 20, MAKELPARAM(100, 100), MAKELPARAM(WM_CONTEXTMENU, 1));
-        CHECK(Until([&] { return background.Window(L"#32768", true) != nullptr; }));
-        // Native Windows routes menu keyboard input through its input queue;
-        // posting WM_KEYDOWN to the hidden owner does not simulate that input.
+        const HWND menu = background.Await(L"#32768", true);
+        // Exercise a real click on the final menu item. A synthetic End/Enter
+        // sequence is not a reliable way to select an item in a mouse-opened menu.
         DWORD foregroundProcess = 0;
         GetWindowThreadProcessId(GetForegroundWindow(), &foregroundProcess);
         CHECK(foregroundProcess == background.info.dwProcessId);
-        INPUT keys[4]{};
-        for (auto& key : keys) key.type = INPUT_KEYBOARD;
-        keys[0].ki.wVk = keys[1].ki.wVk = VK_END;
-        keys[0].ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
-        keys[1].ki.dwFlags = KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP;
-        keys[2].ki.wVk = keys[3].ki.wVk = VK_RETURN;
-        keys[3].ki.dwFlags = KEYEVENTF_KEYUP;
-        CHECK(SendInput(static_cast<UINT>(std::size(keys)), keys, sizeof(INPUT)) == std::size(keys));
+        struct CursorRestore {
+            POINT position{};
+            ~CursorRestore() { SetCursorPos(position.x, position.y); }
+        } cursor;
+        CHECK(GetCursorPos(&cursor.position));
+        RECT menuBounds{};
+        CHECK(GetWindowRect(menu, &menuBounds));
+        const int itemHalfHeight = std::max(4, GetSystemMetricsForDpi(SM_CYMENU, GetDpiForWindow(menu)) / 2);
+        CHECK(SetCursorPos((menuBounds.left + menuBounds.right) / 2, menuBounds.bottom - itemHalfHeight));
+        INPUT click[2]{};
+        click[0].type = click[1].type = INPUT_MOUSE;
+        click[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+        click[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+        CHECK(SendInput(static_cast<UINT>(std::size(click)), click, sizeof(INPUT)) == std::size(click));
         background.Exited();
     }
     std::cout << "second-instance capture routing and packed tray menu Quit passed\n";
