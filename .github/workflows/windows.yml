@@ -18,8 +18,11 @@ jobs:
       - name: Build, test, and package
         shell: pwsh
         run: ./scripts/build.ps1 -Configuration Release -Test -Package
-      - name: Test per-user install, upgrade, and removal
+      - name: Test per-user install, upgrade, and removal with PowerShell 7
         shell: pwsh
+        run: ./tests/install-tests.ps1 -ExecutablePath ./out/Release/FrameSnap.exe
+      - name: Test per-user install, upgrade, and removal with Windows PowerShell 5.1
+        shell: powershell
         run: ./tests/install-tests.ps1 -ExecutablePath ./out/Release/FrameSnap.exe
       - name: Upload unsigned Windows package for review
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

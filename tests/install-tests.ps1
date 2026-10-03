@@ -27,7 +27,16 @@ try {
     if (-not (Test-Path -LiteralPath $runKey)) { New-Item -Path $runKey | Out-Null }
     New-ItemProperty -Path $runKey -Name $sentinel -Value 'Unrelated startup entry - do not remove' -PropertyType String | Out-Null
     $sentinelAdded = $true
-    & (Join-Path $stage 'Install.ps1')
+    # Exercise the double-click entry point, including powershell.exe -File,
+    # from another directory. Invoking Install.ps1 in-process missed PS 5.1's
+    # parameter-default PSScriptRoot initialization behavior.
+    Push-Location ([IO.Path]::GetTempPath())
+    try {
+        & (Join-Path $stage 'Install.cmd')
+        Assert-True ($LASTEXITCODE -eq 0) 'Install.cmd succeeds through Windows PowerShell from another directory'
+    } finally {
+        Pop-Location
+    }
     $target = Join-Path $installDir 'FrameSnap.exe'
     Assert-True (Test-Path -LiteralPath $target) 'Per-user install from a path containing spaces'
     Assert-True (-not (Get-ItemProperty -Path $runKey -Name FrameSnap -ErrorAction SilentlyContinue)) 'Sign-in startup is off by default'
@@ -56,7 +65,8 @@ try {
     Assert-True ((Get-ItemProperty -Path $runKey -Name $sentinel).$sentinel -eq 'Unrelated startup entry - do not remove') 'Unrelated startup values are preserved'
     $settings = Join-Path $env:LOCALAPPDATA 'FrameSnap\settings.ini'
     $hadSettings = Test-Path -LiteralPath $settings
-    & (Join-Path $installDir 'Uninstall.ps1')
+    & (Join-Path $installDir 'Uninstall.cmd')
+    Assert-True ($LASTEXITCODE -eq 0) 'Uninstall.cmd succeeds through Windows PowerShell'
     Assert-True (-not (Test-Path -LiteralPath $target)) 'Uninstall removes the executable'
     Assert-True (-not (Test-Path -LiteralPath $uninstallKey)) 'Uninstall removes only its Installed apps entry'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $programs 'Capture.lnk'))) 'Uninstall removes owned shortcuts'

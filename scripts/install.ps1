@@ -1,11 +1,16 @@
 [CmdletBinding()]
 param(
-    [string]$ExecutablePath = (Join-Path $PSScriptRoot 'FrameSnap.exe'),
+    [string]$ExecutablePath = '',
     [string]$ShortcutHotkey = 'CTRL+ALT+S',
     [switch]$StartWithWindows,
     [switch]$DesktopShortcut
 )
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell -File can bind parameter defaults before PSScriptRoot is
+# initialized. Resolve the packaged executable only after entering the script.
+if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
+    $ExecutablePath = Join-Path $PSScriptRoot 'FrameSnap.exe'
+}
 $source = (Resolve-Path -LiteralPath $ExecutablePath).Path
 $installDir = Join-Path $env:LOCALAPPDATA 'Programs\FrameSnap'
 $target = Join-Path $installDir 'FrameSnap.exe'
@@ -96,7 +101,7 @@ if ($DesktopShortcut) {
 }
 # Retain ownership of shortcuts created by earlier installs for safe removal.
 if ($old) { $links += @($old.Shortcuts) }
-@{ Product = 'FrameSnap'; Version = '0.2.0'; Shortcuts = @($links | Select-Object -Unique) } |
+@{ Product = 'FrameSnap'; Version = '0.2.1'; Shortcuts = @($links | Select-Object -Unique) } |
     ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding UTF8
 if ($enableStartup) {
     # CreateSubKey creates missing parents and preserves existing keys/values.
@@ -108,7 +113,7 @@ if ($enableStartup) {
 }
 ([Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\Microsoft\Windows\CurrentVersion\Uninstall\FrameSnap')).Dispose()
 $uninstall = '"' + (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') + '" -NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $installDir 'Uninstall.ps1') + '"'
-@{ DisplayName = 'FrameSnap'; DisplayVersion = '0.2.0'; InstallLocation = $installDir; DisplayIcon = $target; UninstallString = $uninstall } |
+@{ DisplayName = 'FrameSnap'; DisplayVersion = '0.2.1'; InstallLocation = $installDir; DisplayIcon = $target; UninstallString = $uninstall } |
     ForEach-Object { foreach ($name in $_.Keys) { New-ItemProperty -Path $uninstallKey -Name $name -Value $_[$name] -PropertyType String -Force | Out-Null } }
 New-ItemProperty -Path $uninstallKey -Name NoModify -Value 1 -PropertyType DWord -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name NoRepair -Value 1 -PropertyType DWord -Force | Out-Null
