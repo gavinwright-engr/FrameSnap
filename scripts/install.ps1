@@ -99,13 +99,14 @@ if ($old) { $links += @($old.Shortcuts) }
 @{ Product = 'FrameSnap'; Version = '0.2.0'; Shortcuts = @($links | Select-Object -Unique) } |
     ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding UTF8
 if ($enableStartup) {
-    if (-not (Test-Path -LiteralPath $runKey)) { New-Item -Path $runKey | Out-Null }
+    # CreateSubKey creates missing parents and preserves existing keys/values.
+    ([Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\Microsoft\Windows\CurrentVersion\Run')).Dispose()
     New-ItemProperty -Path $runKey -Name FrameSnap -Value ('"' + $target + '" --background') -PropertyType String -Force | Out-Null
 } else {
     $existing = (Get-ItemProperty -Path $runKey -Name FrameSnap -ErrorAction SilentlyContinue).FrameSnap
     if ($existing -and $ownedStartupCommands -contains $existing) { Remove-ItemProperty -Path $runKey -Name FrameSnap }
 }
-if (-not (Test-Path -LiteralPath $uninstallKey)) { New-Item -Path $uninstallKey | Out-Null }
+([Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\Microsoft\Windows\CurrentVersion\Uninstall\FrameSnap')).Dispose()
 $uninstall = '"' + (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') + '" -NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $installDir 'Uninstall.ps1') + '"'
 @{ DisplayName = 'FrameSnap'; DisplayVersion = '0.2.0'; InstallLocation = $installDir; DisplayIcon = $target; UninstallString = $uninstall } |
     ForEach-Object { foreach ($name in $_.Keys) { New-ItemProperty -Path $uninstallKey -Name $name -Value $_[$name] -PropertyType String -Force | Out-Null } }
