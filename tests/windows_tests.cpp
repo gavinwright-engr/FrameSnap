@@ -303,8 +303,19 @@ void Lifecycle(const std::wstring& executable) {
             << " ms CPU over 1500 ms\n";
         PostMessageW(main, WM_APP + 20, MAKELPARAM(100, 100), MAKELPARAM(WM_CONTEXTMENU, 1));
         CHECK(Until([&] { return background.Window(L"#32768", true) != nullptr; }));
-        PostMessageW(main, WM_KEYDOWN, VK_END, 0);
-        PostMessageW(main, WM_KEYDOWN, VK_RETURN, 0);
+        // Native Windows routes menu keyboard input through its input queue;
+        // posting WM_KEYDOWN to the hidden owner does not simulate that input.
+        DWORD foregroundProcess = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), &foregroundProcess);
+        CHECK(foregroundProcess == background.info.dwProcessId);
+        INPUT keys[4]{};
+        for (auto& key : keys) key.type = INPUT_KEYBOARD;
+        keys[0].ki.wVk = keys[1].ki.wVk = VK_END;
+        keys[0].ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
+        keys[1].ki.dwFlags = KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP;
+        keys[2].ki.wVk = keys[3].ki.wVk = VK_RETURN;
+        keys[3].ki.dwFlags = KEYEVENTF_KEYUP;
+        CHECK(SendInput(static_cast<UINT>(std::size(keys)), keys, sizeof(INPUT)) == std::size(keys));
         background.Exited();
     }
     std::cout << "second-instance capture routing and packed tray menu Quit passed\n";
