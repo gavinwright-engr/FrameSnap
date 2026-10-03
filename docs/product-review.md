@@ -31,7 +31,7 @@ This review focuses on predictable lifecycle, low idle cost, capture privacy, an
 - **Redaction:** highlighters are translucent and erasing removes annotations. A future redaction tool needs opaque pixel replacement and flattened exports, with original/autosave behavior made explicit.
 - **Clipboard privacy:** Windows exclusion metadata controls built-in history/sync, not arbitrary clipboard readers. Do not market it as clipboard encryption or isolation.
 - **Saves:** normal Quit drains accepted writes. A disconnected or stalled filesystem can delay completion; the installer reports a timeout instead of force-killing an app that may still be saving. Crash recovery of temporary partial files is not implemented.
-- **Distribution:** release signing and publisher reputation remain deployment work. This change creates local ZIPs and CI artifacts; it does not publish a release, sign binaries, or bypass platform reputation checks.
+- **Distribution:** release signing and publisher reputation remain deployment work. Current unsigned CI artifacts can be blocked by Application Control even when functional tests pass. See [Windows security and release signing](windows-security.md) for policy diagnostics and the missing trusted signing identity.
 - **Accessibility and displays:** native checkbox semantics and keyboard navigation improve the existing UI, but screen-reader, high-contrast, per-monitor scaling, 1366×768 layouts, and keyboard-only editor review still need native testing. The current settings/editor layout is designed for larger desktops.
 
 ## Windows release validation
@@ -42,7 +42,7 @@ This review focuses on predictable lifecycle, low idle cost, capture privacy, an
 - Native Linux portable tests passed 20 checks for launch options and allocation limits.
 - Wine on an isolated virtual desktop passed 444 component checks and 80 lifecycle checks, including actual capture, clipboard use after process exit, Settings Close, capture cancellation, second-instance forwarding, packed tray activation/menu Quit, conflicting hotkeys, and session shutdown.
 - PowerShell parsed the build, install, uninstall, and installer-test scripts successfully. ZIP contents and the packaged executable were checked; a SHA-256 file accompanies the archive.
-- No native Windows/MSVC build or installer execution has been performed here. The added CI workflow is configured to run those checks but has not been executed in this workspace. Wine's reported private-memory counter was zero and is unsuitable for a memory claim; native performance measurements remain necessary.
+- Native Windows/MSVC build, component/lifecycle tests, and installer tests subsequently passed on GitHub Actions, including the packaged batch launchers and PowerShell 7/Windows PowerShell 5.1. The hosted runner does not validate Smart App Control acceptance. Wine's reported private-memory counter was zero and is unsuitable for a memory claim; native performance measurements remain necessary.
 
 ### Native release checks
 

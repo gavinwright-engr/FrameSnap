@@ -63,7 +63,7 @@ endif()
 
 install(TARGETS FrameSnap RUNTIME DESTINATION .)
 install(FILES README.md LICENSE DESTINATION .)
-install(FILES docs/product-review.md DESTINATION docs)
+install(FILES docs/product-review.md docs/windows-security.md DESTINATION docs)
 install(FILES scripts/install.ps1 DESTINATION . RENAME Install.ps1)
 install(FILES scripts/uninstall.ps1 DESTINATION . RENAME Uninstall.ps1)
 install(FILES scripts/Install.cmd scripts/Uninstall.cmd DESTINATION .)

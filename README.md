@@ -4,6 +4,8 @@ A small, local Windows screenshot tool: select a region, copy it, and get back t
 
 ## Install and capture
 
+**Current CI downloads are unsigned development builds.** Windows Smart App Control or an organization policy can block them. Passing build and installer tests does not establish that a build is trusted by Windows. If Windows reports "An Application Control policy has blocked this file," see [Windows security and release signing](docs/windows-security.md). A signed release is not available yet.
+
 Use a Windows x64 ZIP built from this repository. Extract it and double-click **Install.cmd**. Installation is per user, under `%LOCALAPPDATA%\Programs\FrameSnap`; **Ctrl+Alt+S** launches a capture through a Windows Start-menu shortcut. The installer does not start FrameSnap or enable sign-in startup by default. Windows Installed apps includes an uninstaller. Upgrades preserve existing preferences and the installed startup choice.
 
 For portable use, run **FrameSnap.exe** directly. It captures once and exits after the preview times out or you close the editor. Escape or right-click cancels capture and exits. The clipboard image remains available after the process exits.
@@ -68,4 +70,4 @@ cmake --build build --parallel 4
 
 Cross-builds and Wine tests do not establish native Windows, Explorer, GPU, or HDR correctness. See [the review and Windows validation checklist](docs/product-review.md).
 
-Release ZIPs from this change are not code-signed or published. A SHA-256 file checks download integrity; it is not proof of publisher identity. Before public distribution, sign release executables and installers using a trusted signing identity, verify the native checklist, and distribute through a trusted release channel. Do not ask users to disable SmartScreen or antivirus.
+CI ZIPs are not code-signed. A SHA-256 file checks download integrity; it is not proof of publisher identity. Before public distribution, follow [the release signing requirements](docs/windows-security.md#release-signing), verify the native checklist, and distribute through a trusted release channel. Do not ask users to disable SmartScreen or antivirus.

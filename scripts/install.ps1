@@ -47,8 +47,17 @@ if (-not $PSBoundParameters.ContainsKey('StartWithWindows') -and $ownsStartup) {
 if ($enableStartup -and ('"' + $target + '" --background').Length -gt 260) {
     throw 'This installation path exceeds the Windows startup command limit. Install without -StartWithWindows.'
 }
-# Ask the existing instance to finish saves and quit; never terminate it forcibly.
-$process = Start-Process -FilePath $source -ArgumentList '--quit' -Wait -PassThru
+# Check that Windows can launch the new executable and ask any existing instance
+# to finish saves and quit. Keep this before installation changes: skipping a
+# blocked launch would leave shortcuts to an app Windows still cannot run.
+try {
+    $process = Start-Process -FilePath $source -ArgumentList '--quit' -Wait -PassThru
+} catch {
+    $message = "Windows could not start FrameSnap. Installation stopped before changing files, shortcuts, or startup settings.`n" +
+        "Windows reported: $($_.Exception.Message)`n" +
+        'For Application Control or signature blocks, see https://github.com/gavinwright-engr/FrameSnap/blob/main/docs/windows-security.md'
+    throw [InvalidOperationException]::new($message, $_.Exception)
+}
 if ($process.ExitCode -ne 0) { throw 'FrameSnap is still closing or saving. Try again when it has finished.' }
 New-Item -ItemType Directory -Force -Path $installDir, $programs | Out-Null
 if ($source -ne $target) {

@@ -27,6 +27,31 @@ try {
     if (-not (Test-Path -LiteralPath $runKey)) { New-Item -Path $runKey | Out-Null }
     New-ItemProperty -Path $runKey -Name $sentinel -Value 'Unrelated startup entry - do not remove' -PropertyType String | Out-Null
     $sentinelAdded = $true
+    # Simulate Windows rejecting CreateProcess before it can run --quit. CI does
+    # not enforce the user's Application Control policy; exercise our response
+    # without changing the runner's security configuration.
+    function Start-Process {
+        param($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru)
+        $nativeError = [ComponentModel.Win32Exception]::new(4551, 'An Application Control policy has blocked this file.')
+        throw [InvalidOperationException]::new('This command cannot be run due to the error: ' + $nativeError.Message, $nativeError)
+    }
+    $blockedError = $null
+    try {
+        & (Join-Path $stage 'Install.ps1') -StartWithWindows
+    } catch {
+        $blockedError = $_
+    } finally {
+        Remove-Item Function:\Start-Process
+    }
+    Assert-True ($null -ne $blockedError) 'Blocked executable aborts installation'
+    Assert-True ($blockedError.Exception.Message -match 'Installation stopped before changing') 'Blocked launch explains that installation made no changes'
+    Assert-True ($blockedError.Exception.Message -match 'Application Control policy has blocked this file') 'Original Windows policy error is preserved'
+    Assert-True ($blockedError.Exception.Message -match 'docs/windows-security.md') 'Blocked launch links to signing and policy guidance'
+    Assert-True (-not (Test-Path -LiteralPath $installDir)) 'Blocked launch creates no installation directory'
+    Assert-True (-not (Test-Path -LiteralPath $programs)) 'Blocked launch creates no Start-menu shortcuts'
+    Assert-True (-not (Test-Path -LiteralPath $uninstallKey)) 'Blocked launch creates no Installed apps entry'
+    Assert-True (-not (Get-ItemProperty -Path $runKey -Name FrameSnap -ErrorAction SilentlyContinue)) 'Blocked launch does not enable requested startup'
+    Assert-True ((Get-ItemProperty -Path $runKey -Name $sentinel).$sentinel -eq 'Unrelated startup entry - do not remove') 'Blocked launch preserves unrelated startup values'
     # Exercise the double-click entry point, including powershell.exe -File,
     # from another directory. Invoking Install.ps1 in-process missed PS 5.1's
     # parameter-default PSScriptRoot initialization behavior.
