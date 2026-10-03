@@ -23,7 +23,7 @@ if ((Test-Path -LiteralPath $target) -and -not $old) {
     throw 'The destination already contains an unmanaged FrameSnap.exe. Move it aside before installing.'
 }
 if ($old -and $old.Product -ne 'FrameSnap') { throw 'The destination belongs to an unrecognized installation.' }
-foreach ($name in @('Uninstall.ps1', 'Uninstall.cmd')) {
+foreach ($name in @('Uninstall.ps1')) {
     if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $name))) { throw "Missing installer companion: $name" }
 }
 $shell = New-Object -ComObject WScript.Shell
@@ -61,11 +61,16 @@ if ($source -ne $target) {
         if (Test-Path -LiteralPath $staged) { Remove-Item -LiteralPath $staged }
     }
 }
-foreach ($name in @('Uninstall.ps1', 'Uninstall.cmd')) {
+foreach ($name in @('Uninstall.ps1')) {
     $file = Join-Path $PSScriptRoot $name
     if (-not (Test-Path -LiteralPath $file)) { throw "Missing installer companion: $name" }
     $destination = Join-Path $installDir $name
     if ([IO.Path]::GetFullPath($file) -ne [IO.Path]::GetFullPath($destination)) { Copy-Item -LiteralPath $file -Destination $destination -Force }
+}
+# The optional batch helper stays in the downloaded package, outside the files
+# the uninstaller removes. Retire the installed helper from older versions.
+if ($old -and (Test-Path -LiteralPath (Join-Path $installDir 'Uninstall.cmd'))) {
+    Remove-Item -LiteralPath (Join-Path $installDir 'Uninstall.cmd')
 }
 $links = @()
 function Add-FrameSnapShortcut([string]$Path, [string]$Arguments, [string]$Hotkey = '') {

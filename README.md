@@ -8,6 +8,8 @@ Use a Windows x64 ZIP built from this repository. Extract it and double-click **
 
 For portable use, run **FrameSnap.exe** directly. It captures once and exits after the preview times out or you close the editor. Escape or right-click cancels capture and exits. The clipboard image remains available after the process exits.
 
+Uninstall through Windows Installed apps, or run **Uninstall.cmd** from the extracted download. This helper stays outside the installed files so it can finish cleanly while they are removed.
+
 - Drag a rectangle, or click two opposite corners.
 - Click the preview to annotate; right-click it to dismiss.
 - In the editor, Ctrl+C copies the edited image and closes; Escape or the window's Close button dismisses it.

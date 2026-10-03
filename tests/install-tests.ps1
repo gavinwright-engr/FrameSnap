@@ -42,6 +42,7 @@ try {
     }
     $target = Join-Path $installDir 'FrameSnap.exe'
     Assert-True (Test-Path -LiteralPath $target) 'Per-user install from a path containing spaces'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $installDir 'Uninstall.cmd'))) 'Batch helper remains outside the installation it removes'
     Assert-True (-not (Get-ItemProperty -Path $runKey -Name FrameSnap -ErrorAction SilentlyContinue)) 'Sign-in startup is off by default'
     $shell = New-Object -ComObject WScript.Shell
     $capture = $shell.CreateShortcut((Join-Path $programs 'Capture.lnk'))
@@ -68,7 +69,7 @@ try {
     Assert-True ((Get-ItemProperty -Path $runKey -Name $sentinel).$sentinel -eq 'Unrelated startup entry - do not remove') 'Unrelated startup values are preserved'
     $settings = Join-Path $env:LOCALAPPDATA 'FrameSnap\settings.ini'
     $hadSettings = Test-Path -LiteralPath $settings
-    & (Join-Path $installDir 'Uninstall.cmd') 2>&1 | Tee-Object -Variable launcherOutput
+    & (Join-Path $stage 'Uninstall.cmd') 2>&1 | Tee-Object -Variable launcherOutput
     if ($LASTEXITCODE -ne 0) {
         throw "Uninstall.cmd failed with exit code $LASTEXITCODE`n$($launcherOutput -join "`n")"
     }
