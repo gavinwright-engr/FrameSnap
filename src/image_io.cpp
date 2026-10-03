@@ -7,7 +7,7 @@ bool WriteBitmapToFrame(IWICBitmapFrameEncode* frame, const ImageData& image) {
         return false;
     }
     WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
-    if (FAILED(frame->SetPixelFormat(&format))) {
+    if (FAILED(frame->SetPixelFormat(&format)) || !IsEqualGUID(format, GUID_WICPixelFormat32bppBGRA)) {
         return false;
     }
     return SUCCEEDED(frame->WritePixels(
@@ -32,44 +32,32 @@ bool ImageIo::EnsureFactory() {
         IID_PPV_ARGS(factory_.ReleaseAndGetAddressOf())));
 }
 
-bool ImageIo::SavePng(const ImageData& image, const std::wstring& path) {
-    if (!EnsureFactory()) {
-        return false;
-    }
-
-    ComPtr<IWICStream> stream;
-    if (FAILED(factory_->CreateStream(&stream))) {
-        return false;
-    }
-    if (FAILED(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE))) {
-        return false;
-    }
-
-    ComPtr<IWICBitmapEncoder> encoder;
-    if (FAILED(factory_->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder))) {
-        return false;
-    }
-    if (FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache))) {
-        return false;
-    }
-
-    ComPtr<IWICBitmapFrameEncode> frame;
-    ComPtr<IPropertyBag2> bag;
-    if (FAILED(encoder->CreateNewFrame(&frame, &bag))) {
-        return false;
-    }
-    if (FAILED(frame->Initialize(bag.Get()))) {
-        return false;
-    }
-    if (!WriteBitmapToFrame(frame.Get(), image)) {
-        return false;
-    }
-    return SUCCEEDED(frame->Commit()) && SUCCEEDED(encoder->Commit());
+bool ImageIo::SavePng(const ImageData& image, const std::wstring& path, bool replaceExisting) {
+    if (!image.IsValid() || path.empty()) return false;
+    const auto bytes = EncodePng(image);
+    if (bytes.empty()) return false;
+    const std::filesystem::path destination(path);
+    std::error_code error;
+    if (!destination.parent_path().empty()) std::filesystem::create_directories(destination.parent_path(), error);
+    if (error) return false;
+    GUID id{};
+    wchar_t suffix[40]{};
+    if (FAILED(CoCreateGuid(&id)) || StringFromGUID2(id, suffix, static_cast<int>(std::size(suffix))) == 0) return false;
+    const std::wstring temporary = path + L"." + suffix + L".partial";
+    HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    const bool wrote = WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) != FALSE && written == bytes.size();
+    const bool closed = CloseHandle(file) != FALSE;
+    const DWORD flags = MOVEFILE_WRITE_THROUGH | (replaceExisting ? MOVEFILE_REPLACE_EXISTING : 0);
+    const bool saved = wrote && closed && MoveFileExW(temporary.c_str(), path.c_str(), flags) != FALSE;
+    if (!saved) DeleteFileW(temporary.c_str());
+    return saved;
 }
 
 std::vector<std::uint8_t> ImageIo::EncodePng(const ImageData& image) {
     std::vector<std::uint8_t> bytes;
-    if (!EnsureFactory()) {
+    if (!image.IsValid() || !EnsureFactory()) {
         return bytes;
     }
 
@@ -112,15 +100,16 @@ std::vector<std::uint8_t> ImageIo::EncodePng(const ImageData& image) {
     if (FAILED(memoryStream->Stat(&stats, STATFLAG_NONAME))) {
         return bytes;
     }
+    if (stats.cbSize.QuadPart > MAXDWORD) return bytes;
     const auto size = static_cast<ULONG>(stats.cbSize.QuadPart);
     if (size == 0) {
         return bytes;
     }
     bytes.resize(size);
     LARGE_INTEGER origin{};
-    memoryStream->Seek(origin, STREAM_SEEK_SET, nullptr);
+    if (FAILED(memoryStream->Seek(origin, STREAM_SEEK_SET, nullptr))) return {};
     ULONG read = 0;
-    if (FAILED(memoryStream->Read(bytes.data(), size, &read))) {
+    if (FAILED(memoryStream->Read(bytes.data(), size, &read)) || read != size) {
         bytes.clear();
         return bytes;
     }

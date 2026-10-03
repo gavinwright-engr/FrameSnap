@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.h"
+#include "image_layout.h"
 
 struct FloatPoint {
     float x{};
@@ -16,17 +17,16 @@ enum class ActiveTool {
 };
 
 struct HotkeyBinding {
-    UINT modifiers{MOD_WIN | MOD_SHIFT};
+    UINT modifiers{MOD_CONTROL | MOD_ALT};
     UINT virtualKey{'S'};
 };
 
 struct AppSettings {
     HotkeyBinding hotkey{};
     bool runAtStartupEnabled{false};
-    bool printScreenOverrideEnabled{false};
-    bool autoSaveEnabled{true};
+    bool autoSaveEnabled{false};
     bool clickModeEnabled{true};
-    bool soundEnabled{true};
+    bool soundEnabled{false};
     std::wstring saveFolder;
     UINT previewTimeoutMs{3000};
     UINT dragThresholdPx{4};
@@ -57,6 +57,11 @@ struct ImageData {
     RECT sourceRect{};
     std::vector<std::uint8_t> pixels;
     std::wstring savedPath;
+
+    bool IsValid() const {
+        const auto size = ImageByteSize(width, height);
+        return size.has_value() && pixels.size() == *size;
+    }
 };
 
 struct CaptureMetrics {

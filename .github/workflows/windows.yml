@@ -1,0 +1,38 @@
+name: Windows build and regression tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build, test, and package
+        shell: pwsh
+        run: ./scripts/build.ps1 -Configuration Release -Test -Package
+      - name: Test per-user install, upgrade, and removal
+        shell: pwsh
+        run: ./tests/install-tests.ps1 -ExecutablePath ./out/Release/FrameSnap.exe
+      - name: Upload unsigned Windows package for review
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: FrameSnap-windows-x64
+          path: |
+            out/packages/*.zip
+            out/packages/*.sha256
+          if-no-files-found: error
+  portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build --output-on-failure

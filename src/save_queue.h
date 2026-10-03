@@ -1,29 +1,22 @@
 #pragma once
 
-#include "common.h"
 #include "image_io.h"
-#include "types.h"
 
 class SaveQueue {
 public:
-    SaveQueue();
     ~SaveQueue();
-
-    void Start();
     void Stop();
-    bool Enqueue(const SaveJob& job);
+    // Called on the UI thread. Completion is posted without sharing mutable pixels.
+    bool Enqueue(const SaveJob& job, HWND notifyWindow);
 
 private:
-    void ThreadMain();
-
-    static constexpr std::size_t kMaxQueuedBytes = 1024ULL * 1024ULL * 1024ULL;
-
-    std::atomic<bool> running_{false};
-    std::atomic<bool> warned_{false};
+    void ThreadMain(HWND notifyWindow);
+    // Includes the in-flight image, not just jobs waiting in the queue.
+    static constexpr std::size_t kMaxQueuedBytes = 128ULL * 1024 * 1024;
     std::thread thread_;
     std::mutex mutex_;
-    std::condition_variable cv_;
     std::queue<SaveJob> queue_;
     std::size_t queuedBytes_{};
-    ImageIo imageIo_;
+    bool active_{};
+    bool stopping_{};
 };

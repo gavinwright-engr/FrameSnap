@@ -46,6 +46,13 @@ UINT RefreshIntervalMsForPoint(POINT screenPoint) {
 OverlayWindow::OverlayWindow(HINSTANCE instance, HWND owner)
     : instance_(instance), owner_(owner) {}
 
+OverlayWindow::~OverlayWindow() {
+    Cancel();
+    if (IsWindow(hwnd_)) DestroyWindow(hwnd_);
+    if (IsWindow(freezeHwnd_)) DestroyWindow(freezeHwnd_);
+    if (captureCursor_ != nullptr && captureCursor_ != LoadCursorW(nullptr, IDC_CROSS)) DestroyCursor(captureCursor_);
+}
+
 HCURSOR OverlayWindow::CreateCaptureCursor() const {
     constexpr int size = 32;
     Gdiplus::Bitmap bitmap(size, size, PixelFormat32bppARGB);
@@ -179,6 +186,7 @@ bool OverlayWindow::BeginSession(const AppSettings& settings, std::chrono::stead
     pendingPresent_ = false;
 
     if (!EnsureWindow()) {
+        frozenFrame_.reset();
         return false;
     }
     if (frozenFrame_ != nullptr && !EnsureFreezeWindow()) {
@@ -232,12 +240,13 @@ bool OverlayWindow::BeginSession(const AppSettings& settings, std::chrono::stead
 }
 
 void OverlayWindow::Cancel() {
-    KillTimer(hwnd_, kPresentTimerId);
+    active_ = false; // ReleaseCapture can synchronously send WM_CAPTURECHANGED.
+    if (hwnd_ != nullptr) KillTimer(hwnd_, kPresentTimerId);
     if (freezeHwnd_ != nullptr) {
         ShowWindow(freezeHwnd_, SW_HIDE);
     }
     if (hwnd_ != nullptr) {
-        ReleaseCapture();
+        if (GetCapture() == hwnd_) ReleaseCapture();
         SetLayeredWindowAttributes(hwnd_, 0, 0, LWA_ALPHA);
         ShowWindow(hwnd_, SW_HIDE);
     }
@@ -393,7 +402,7 @@ void OverlayWindow::FinishSelection(const RECT& rect, bool clickModeCompletion) 
     request->clickModeCompletion = clickModeCompletion;
     request->hotkeyStart = hotkeyStart_;
     request->commitTime = std::chrono::steady_clock::now();
-    PostMessageW(owner_, WM_APP_CAPTURE_READY, 0, reinterpret_cast<LPARAM>(request.release()));
+    if (PostMessageW(owner_, WM_APP_CAPTURE_READY, 0, reinterpret_cast<LPARAM>(request.get()))) request.release();
 }
 
 void OverlayWindow::PaintFrozenFrame() {
@@ -505,8 +514,9 @@ LRESULT CALLBACK OverlayWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, 
     if (message == WM_NCCREATE) {
         const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
         self = static_cast<OverlayWindow*>(create->lpCreateParams);
+        self->hwnd_ = hwnd;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
-        return TRUE;
+        return DefWindowProcW(hwnd, message, wParam, lParam);
     }
     return self != nullptr ? self->HandleMessage(message, wParam, lParam) : DefWindowProcW(hwnd, message, wParam, lParam);
 }
@@ -516,8 +526,9 @@ LRESULT CALLBACK OverlayWindow::FreezeWndProc(HWND hwnd, UINT message, WPARAM wP
     if (message == WM_NCCREATE) {
         const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
         self = static_cast<OverlayWindow*>(create->lpCreateParams);
+        self->freezeHwnd_ = hwnd;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
-        return TRUE;
+        return DefWindowProcW(hwnd, message, wParam, lParam);
     }
     return self != nullptr ? self->HandleFreezeMessage(message, wParam, lParam) : DefWindowProcW(hwnd, message, wParam, lParam);
 }
@@ -603,9 +614,13 @@ LRESULT OverlayWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     case WM_PAINT:
         Paint();
         return 0;
+    case WM_CLOSE:
+    case WM_CANCELMODE:
+    case WM_CAPTURECHANGED:
     case WM_KILLFOCUS:
         if (active_) {
-            SetFocus(hwnd_);
+            Cancel();
+            PostMessageW(owner_, WM_APP_CAPTURE_CANCELLED, 0, 0);
         }
         return 0;
     default:

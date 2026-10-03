@@ -11,6 +11,8 @@ public:
     void Show(const AppSettings& settings, const std::wstring& hotkeyStatus, const std::wstring& printScreenStatus, int showCommand = SW_SHOWNORMAL);
     void UpdateStatus(const std::wstring& hotkeyStatus, const std::wstring& printScreenStatus);
     HWND Handle() const;
+    void Hide();
+    bool HandleAccelerator(const MSG& message);
 
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -34,7 +36,6 @@ private:
     void StopRecordingHook();
     HBRUSH BrushForControl(HWND control) const;
     void DrawActionButton(const DRAWITEMSTRUCT& drawItem) const;
-    void DrawCheckbox(const DRAWITEMSTRUCT& drawItem) const;
     static HFONT CreateUiFont(int height, int weight);
     static UINT CurrentModifierFlags(UINT activeKey = 0);
     static bool IsModifierKey(UINT virtualKey);
@@ -46,7 +47,7 @@ private:
     HWND clickModeCheckbox_{};
     HWND soundCheckbox_{};
     HWND startupCheckbox_{};
-    HWND printScreenOverrideCheckbox_{};
+    HWND keyboardSettingsButton_{};
     HWND folderEdit_{};
     HWND browseButton_{};
     HWND hotkeyPreview_{};

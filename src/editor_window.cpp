@@ -1,6 +1,7 @@
 #include "editor_window.h"
 
 #include "util.h"
+#include "clipboard_publisher.h"
 
 #include <limits>
 #include <numeric>
@@ -505,36 +506,7 @@ bool StrokeHasContent(const Stroke& stroke) {
     return false;
 }
 
-HGLOBAL CreateDibV5(const ImageData& image) {
-    const SIZE_T headerSize = sizeof(BITMAPV5HEADER);
-    const SIZE_T pixelSize = image.pixels.size();
-    const HGLOBAL handle = GlobalAlloc(GMEM_MOVEABLE, headerSize + pixelSize);
-    if (handle == nullptr) {
-        return nullptr;
-    }
 
-    auto* data = static_cast<BYTE*>(GlobalLock(handle));
-    if (data == nullptr) {
-        GlobalFree(handle);
-        return nullptr;
-    }
-
-    auto* header = reinterpret_cast<BITMAPV5HEADER*>(data);
-    ZeroMemory(header, sizeof(*header));
-    header->bV5Size = sizeof(BITMAPV5HEADER);
-    header->bV5Width = image.width;
-    header->bV5Height = -image.height;
-    header->bV5Planes = 1;
-    header->bV5BitCount = 32;
-    header->bV5Compression = BI_BITFIELDS;
-    header->bV5RedMask = 0x00FF0000;
-    header->bV5GreenMask = 0x0000FF00;
-    header->bV5BlueMask = 0x000000FF;
-    header->bV5AlphaMask = 0xFF000000;
-    memcpy(data + headerSize, image.pixels.data(), pixelSize);
-    GlobalUnlock(handle);
-    return handle;
-}
 
 void DrawButtonGlyph(Gdiplus::Graphics& graphics, UINT controlId, const Gdiplus::RectF& rect, COLORREF color) {
     Gdiplus::Pen pen(ToGdiColor(color), 2.3f);
@@ -632,6 +604,7 @@ EditorWindow::EditorWindow(HINSTANCE instance, HWND owner)
     : instance_(instance), owner_(owner) {}
 
 EditorWindow::~EditorWindow() {
+    if (IsWindow(hwnd_)) DestroyWindow(hwnd_);
     if (uiFont_ != nullptr) {
         DeleteObject(uiFont_);
     }
@@ -675,8 +648,7 @@ bool EditorWindow::HandleAccelerator(const MSG& message) {
     }
 
     if (message.wParam == VK_ESCAPE) {
-        HideBrushPreview();
-        ShowWindow(hwnd_, SW_HIDE);
+        Close();
         return true;
     }
 
@@ -1404,23 +1376,18 @@ ImageData EditorWindow::RenderDocument() const {
     return rendered;
 }
 
-bool EditorWindow::CopyImageToClipboard(const ImageData& image) const {
-    HGLOBAL dib = CreateDibV5(image);
-    if (dib == nullptr) {
-        return false;
-    }
-    if (!OpenClipboard(hwnd_)) {
-        GlobalFree(dib);
-        return false;
-    }
-
-    EmptyClipboard();
-    const bool copied = SetClipboardData(CF_DIBV5, dib) != nullptr;
-    CloseClipboard();
-    if (!copied) {
-        GlobalFree(dib);
-    }
-    return copied;
+void EditorWindow::Close(bool notifyOwner) {
+    HideBrushPreview();
+    drawing_ = false;
+    if (GetCapture() == hwnd_) ReleaseCapture();
+    if (IsWindow(hwnd_)) ShowWindow(hwnd_, SW_HIDE);
+    image_.reset();
+    markupImage_ = {};
+    strokes_.clear();
+    redoStrokes_.clear();
+    inFlightStroke_ = {};
+    settings_ = nullptr;
+    if (notifyOwner) PostMessageW(owner_, WM_APP_EDITOR_CLOSED, 0, 0);
 }
 
 void EditorWindow::CopyToClipboardAndClose() {
@@ -1428,10 +1395,11 @@ void EditorWindow::CopyToClipboardAndClose() {
         return;
     }
     const ImageData rendered = RenderDocument();
-    if (CopyImageToClipboard(rendered)) {
-        MessageBeep(MB_OK);
+    if (ClipboardPublisher::Publish(hwnd_, rendered)) {
+        Close();
+    } else {
+        MessageBoxW(hwnd_, L"The clipboard is busy. Try copying again, or save the image.", kFrameSnapAppName, MB_OK | MB_ICONWARNING);
     }
-    ShowWindow(hwnd_, SW_HIDE);
 }
 
 void EditorWindow::SaveImage() {
@@ -1443,9 +1411,10 @@ void EditorWindow::SaveImage() {
     if (path.empty()) {
         path = (util::DefaultSaveFolder() / util::TimestampedFileName(rendered)).wstring();
     }
-    if (imageIo_.SavePng(rendered, path)) {
+    if (imageIo_.SavePng(rendered, path, !image_->savedPath.empty())) {
         image_->savedPath = path;
-        MessageBeep(MB_OK);
+    } else {
+        MessageBoxW(hwnd_, L"The PNG could not be saved. Check the destination folder and available disk space.", kFrameSnapAppName, MB_OK | MB_ICONWARNING);
     }
 }
 
@@ -1658,8 +1627,9 @@ LRESULT CALLBACK EditorWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, L
     if (message == WM_NCCREATE) {
         const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
         self = static_cast<EditorWindow*>(create->lpCreateParams);
+        self->hwnd_ = hwnd;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
-        return TRUE;
+        return DefWindowProcW(hwnd, message, wParam, lParam);
     }
     return self != nullptr ? self->HandleMessage(message, wParam, lParam) : DefWindowProcW(hwnd, message, wParam, lParam);
 }
@@ -1855,12 +1825,13 @@ LRESULT EditorWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         }
         break;
     case WM_CLOSE:
-        HideBrushPreview();
-        ShowWindow(hwnd_, SW_HIDE);
+        Close();
         return 0;
-    case WM_DESTROY:
+    case WM_NCDESTROY: {
+        HWND destroyed = hwnd_;
         hwnd_ = nullptr;
-        return 0;
+        return DefWindowProcW(destroyed, message, wParam, lParam);
+    }
     case WM_PAINT:
         Paint();
         return 0;

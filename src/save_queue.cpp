@@ -1,73 +1,62 @@
 #include "save_queue.h"
 
-SaveQueue::SaveQueue() = default;
-
-SaveQueue::~SaveQueue() {
-    Stop();
-}
-
-void SaveQueue::Start() {
-    if (running_.exchange(true)) {
-        return;
-    }
-    thread_ = std::thread([this] { ThreadMain(); });
-}
+SaveQueue::~SaveQueue() { Stop(); }
 
 void SaveQueue::Stop() {
-    if (!running_.exchange(false)) {
-        return;
-    }
-    cv_.notify_all();
-    if (thread_.joinable()) {
-        thread_.join();
-    }
-}
-
-bool SaveQueue::Enqueue(const SaveJob& job) {
-    if (job.image == nullptr) {
-        return false;
-    }
-    if (!running_) {
-        Start();
-    }
-    const auto bytes = job.image->pixels.size();
     {
         std::scoped_lock lock(mutex_);
-        if (bytes > kMaxQueuedBytes || queuedBytes_ > kMaxQueuedBytes - bytes) {
-            if (!warned_.exchange(true)) {
-                MessageBeep(MB_ICONWARNING);
-            }
-            return false;
-        }
-        queue_.push(job);
-        queuedBytes_ += bytes;
+        stopping_ = true;
     }
-    cv_.notify_one();
+    // Accepted saves finish; the worker never waits for the UI thread.
+    if (thread_.joinable()) thread_.join();
+}
+
+bool SaveQueue::Enqueue(const SaveJob& job, HWND notifyWindow) {
+    if (job.image == nullptr || !job.image->IsValid()) return false;
+    const auto bytes = job.image->pixels.size();
+    std::unique_lock lock(mutex_);
+    if (stopping_ || bytes > kMaxQueuedBytes || queuedBytes_ > kMaxQueuedBytes - bytes) return false;
+    if (!active_ && thread_.joinable()) {
+        lock.unlock();
+        thread_.join();
+        lock.lock();
+    }
+    queue_.push(job);
+    queuedBytes_ += bytes;
+    if (!active_) {
+        active_ = true;
+        thread_ = std::thread([this, notifyWindow] { ThreadMain(notifyWindow); });
+    }
     return true;
 }
 
-void SaveQueue::ThreadMain() {
-    const HRESULT coInitializeResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    const bool coInitialized = SUCCEEDED(coInitializeResult);
-    for (;;) {
-        SaveJob job;
-        {
-            std::unique_lock lock(mutex_);
-            cv_.wait(lock, [this] { return !running_ || !queue_.empty(); });
-            if (!running_ && queue_.empty()) {
-                break;
+void SaveQueue::ThreadMain(HWND notifyWindow) {
+    const HRESULT initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    {
+        ImageIo imageIo; // Release COM objects before CoUninitialize.
+        for (;;) {
+            SaveJob job;
+            {
+                std::scoped_lock lock(mutex_);
+                if (queue_.empty()) {
+                    active_ = false;
+                    break;
+                }
+                job = std::move(queue_.front());
+                queue_.pop();
             }
-            job = queue_.front();
-            queue_.pop();
-            if (job.image != nullptr) {
+            bool saved = false;
+            try {
+                saved = SUCCEEDED(initialized) && imageIo.SavePng(*job.image, job.path);
+            } catch (const std::exception&) {
+                // Allocation/filesystem failures must report a failed save, not terminate the app.
+            }
+            {
+                std::scoped_lock lock(mutex_);
                 queuedBytes_ -= job.image->pixels.size();
             }
-        }
-        if (job.image != nullptr) {
-            imageIo_.SavePng(*job.image, job.path);
+            PostMessageW(notifyWindow, WM_APP_SAVE_COMPLETED, saved ? 1 : 0, 0);
         }
     }
-    if (coInitialized) {
-        CoUninitialize();
-    }
+    if (SUCCEEDED(initialized)) CoUninitialize();
 }

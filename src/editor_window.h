@@ -13,6 +13,7 @@ public:
     void Show(const std::shared_ptr<ImageData>& image, AppSettings& settings);
     bool HandleAccelerator(const MSG& message);
     HWND Handle() const;
+    void Close(bool notifyOwner = true);
 
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -53,7 +54,6 @@ private:
     void UpdateBrushPreview(POINT point, float width);
     void HideBrushPreview();
     RECT StrokeDirtyRect(const Stroke& stroke, size_t startIndex = 0) const;
-    bool CopyImageToClipboard(const ImageData& image) const;
     void CopyToClipboardAndClose();
     ImageData RenderDocument() const;
 

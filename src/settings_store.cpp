@@ -30,33 +30,26 @@ SettingsStore::SettingsStore()
 AppSettings SettingsStore::Load() const {
     AppSettings settings{};
     settings.saveFolder = util::DefaultSaveFolder().wstring();
-    settings.runAtStartupEnabled =
-        ReadIniInt(path_, L"app", L"run_at_startup", 0) != 0 && util::IsRunAtStartupEnabled();
-    settings.printScreenOverrideEnabled = ReadIniInt(path_, L"app", L"print_screen_override", util::IsPrintScreenSnippingEnabled() ? 0 : 1) != 0;
-    settings.autoSaveEnabled = ReadIniInt(path_, L"capture", L"auto_save", 1) != 0;
+    settings.runAtStartupEnabled = util::IsRunAtStartupEnabled();
+    settings.autoSaveEnabled = ReadIniInt(path_, L"capture", L"auto_save", 0) != 0;
     settings.clickModeEnabled = ReadIniInt(path_, L"capture", L"click_mode", 1) != 0;
-    settings.soundEnabled = ReadIniInt(path_, L"capture", L"sound", 1) != 0;
-    settings.previewTimeoutMs = static_cast<UINT>(ReadIniInt(path_, L"capture", L"preview_timeout_ms", 3000));
-    settings.dragThresholdPx = static_cast<UINT>(ReadIniInt(path_, L"capture", L"drag_threshold_px", 4));
-    settings.hotkey.modifiers = static_cast<UINT>(ReadIniInt(path_, L"hotkey", L"modifiers", MOD_WIN | MOD_SHIFT));
+    settings.soundEnabled = ReadIniInt(path_, L"capture", L"sound", 0) != 0;
+    settings.previewTimeoutMs = static_cast<UINT>(std::clamp(ReadIniInt(path_, L"capture", L"preview_timeout_ms", 3000), 500, 30000));
+    settings.dragThresholdPx = static_cast<UINT>(std::clamp(ReadIniInt(path_, L"capture", L"drag_threshold_px", 4), 1, 64));
+    settings.hotkey.modifiers = static_cast<UINT>(ReadIniInt(path_, L"hotkey", L"modifiers", MOD_CONTROL | MOD_ALT));
     settings.hotkey.virtualKey = static_cast<UINT>(ReadIniInt(path_, L"hotkey", L"virtual_key", 'S'));
-    settings.penWidth = static_cast<float>(ReadIniInt(path_, L"markup", L"pen_width", 3));
-    settings.highlighterWidth = static_cast<float>(ReadIniInt(path_, L"markup", L"highlighter_width", 14));
+    settings.penWidth = static_cast<float>(std::clamp(ReadIniInt(path_, L"markup", L"pen_width", 3), 1, 96));
+    settings.highlighterWidth = static_cast<float>(std::clamp(ReadIniInt(path_, L"markup", L"highlighter_width", 14), 2, 96));
     settings.penColor = static_cast<COLORREF>(ReadIniInt(path_, L"markup", L"pen_color", RGB(255, 72, 72)));
     settings.highlighterColor = static_cast<COLORREF>(ReadIniInt(path_, L"markup", L"highlighter_color", RGB(255, 230, 0)));
 
     const auto folder = ReadIniString(path_, L"capture", L"save_folder", settings.saveFolder);
     settings.saveFolder = folder.empty() ? util::DefaultSaveFolder().wstring() : folder;
-    std::error_code error;
-    std::filesystem::create_directories(settings.saveFolder, error);
     return settings;
 }
 
 bool SettingsStore::Save(const AppSettings& settings) const {
-    std::error_code error;
-    std::filesystem::create_directories(std::filesystem::path(settings.saveFolder), error);
     return WriteIniInt(path_, L"app", L"run_at_startup", settings.runAtStartupEnabled ? 1 : 0) &&
-           WriteIniInt(path_, L"app", L"print_screen_override", settings.printScreenOverrideEnabled ? 1 : 0) &&
            WriteIniInt(path_, L"capture", L"auto_save", settings.autoSaveEnabled ? 1 : 0) &&
            WriteIniInt(path_, L"capture", L"click_mode", settings.clickModeEnabled ? 1 : 0) &&
            WriteIniInt(path_, L"capture", L"sound", settings.soundEnabled ? 1 : 0) &&

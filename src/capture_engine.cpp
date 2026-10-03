@@ -66,15 +66,15 @@ bool CaptureEngine::EnumerateOutputs() {
 
     for (UINT adapterIndex = 0;; ++adapterIndex) {
         ComPtr<IDXGIAdapter1> adapter;
-        if (factory->EnumAdapters1(adapterIndex, adapter.GetAddressOf()) == DXGI_ERROR_NOT_FOUND) {
-            break;
-        }
+        const HRESULT adapterResult = factory->EnumAdapters1(adapterIndex, adapter.GetAddressOf());
+        if (adapterResult == DXGI_ERROR_NOT_FOUND) break;
+        if (FAILED(adapterResult) || adapter == nullptr) return false;
 
         for (UINT outputIndex = 0;; ++outputIndex) {
             ComPtr<IDXGIOutput> output;
-            if (adapter->EnumOutputs(outputIndex, output.GetAddressOf()) == DXGI_ERROR_NOT_FOUND) {
-                break;
-            }
+            const HRESULT outputResult = adapter->EnumOutputs(outputIndex, output.GetAddressOf());
+            if (outputResult == DXGI_ERROR_NOT_FOUND) break;
+            if (FAILED(outputResult) || output == nullptr) break;
 
             DXGI_OUTPUT_DESC desc{};
             if (FAILED(output->GetDesc(&desc)) || !desc.AttachedToDesktop) {
@@ -166,7 +166,10 @@ std::shared_ptr<ImageData> CaptureEngine::Capture(const RECT& selection) {
     image->sourceRect = normalized;
     image->width = normalized.right - normalized.left;
     image->height = normalized.bottom - normalized.top;
-    image->pixels.resize(static_cast<std::size_t>(image->width) * static_cast<std::size_t>(image->height) * 4U);
+    const auto imageBytes = ImageByteSize(image->width, image->height);
+    if (!imageBytes) return nullptr;
+    image->pixels.resize(*imageBytes);
+    for (std::size_t i = 3; i < image->pixels.size(); i += 4) image->pixels[i] = 255;
 
     bool any = false;
     for (auto& session : sessions_) {

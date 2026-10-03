@@ -6,6 +6,7 @@
 class OverlayWindow {
 public:
     OverlayWindow(HINSTANCE instance, HWND owner);
+    ~OverlayWindow();
 
     bool BeginSession(const AppSettings& settings, std::chrono::steady_clock::time_point hotkeyStart, const std::shared_ptr<ImageData>& frozenFrame);
     void Cancel();

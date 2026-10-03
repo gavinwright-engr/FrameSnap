@@ -24,7 +24,8 @@ constexpr COLORREF kPreviewActionFill = RGB(37, 99, 235);
 constexpr COLORREF kPreviewActionText = RGB(255, 255, 255);
 
 RECT WorkAreaForRect(const RECT& rect) {
-    MONITORINFO info{sizeof(info)};
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
     const HMONITOR monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
     GetMonitorInfoW(monitor, &info);
     return info.rcWork;
@@ -80,6 +81,7 @@ PreviewWindow::PreviewWindow(HINSTANCE instance, HWND owner)
     : instance_(instance), owner_(owner) {}
 
 PreviewWindow::~PreviewWindow() {
+    if (IsWindow(hwnd_)) DestroyWindow(hwnd_);
     if (titleFont_ != nullptr) {
         DeleteObject(titleFont_);
     }
@@ -125,10 +127,11 @@ bool PreviewWindow::EnsureWindow() {
     return true;
 }
 
-void PreviewWindow::Show(const std::shared_ptr<ImageData>& image, UINT timeoutMs) {
+bool PreviewWindow::Show(const std::shared_ptr<ImageData>& image, UINT timeoutMs) {
     image_ = image;
     if (!EnsureWindow() || image_ == nullptr) {
-        return;
+        image_.reset();
+        return false;
     }
     const RECT workArea = WorkAreaForRect(image_->sourceRect);
     const int x = workArea.right - kPreviewWidth - 18;
@@ -136,11 +139,13 @@ void PreviewWindow::Show(const std::shared_ptr<ImageData>& image, UINT timeoutMs
     SetWindowPos(hwnd_, HWND_TOPMOST, x, y, kPreviewWidth, kPreviewHeight, SWP_SHOWWINDOW | SWP_NOACTIVATE);
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
     KillTimer(hwnd_, kPreviewTimerId);
-    SetTimer(hwnd_, kPreviewTimerId, timeoutMs, nullptr);
+    if (SetTimer(hwnd_, kPreviewTimerId, timeoutMs, nullptr) == 0) { Hide(); return false; }
     InvalidateRect(hwnd_, nullptr, FALSE);
+    return true;
 }
 
 void PreviewWindow::Hide() {
+    image_.reset();
     if (hwnd_ != nullptr) {
         KillTimer(hwnd_, kPreviewTimerId);
         ShowWindow(hwnd_, SW_HIDE);
@@ -296,8 +301,9 @@ LRESULT CALLBACK PreviewWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, 
     if (message == WM_NCCREATE) {
         const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
         self = static_cast<PreviewWindow*>(create->lpCreateParams);
+        self->hwnd_ = hwnd;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
-        return TRUE;
+        return DefWindowProcW(hwnd, message, wParam, lParam);
     }
     return self != nullptr ? self->HandleMessage(message, wParam, lParam) : DefWindowProcW(hwnd, message, wParam, lParam);
 }
@@ -305,17 +311,27 @@ LRESULT CALLBACK PreviewWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam, 
 LRESULT PreviewWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_LBUTTONUP:
-        Hide();
-        PostMessageW(owner_, WM_APP_PREVIEW_CLICKED, 0, 0);
+        SendMessageW(owner_, WM_APP_PREVIEW_CLICKED, 0, 0);
         return 0;
     case WM_TIMER:
         if (wParam == kPreviewTimerId) {
             Hide();
+            PostMessageW(owner_, WM_APP_PREVIEW_CLOSED, 0, 0);
         }
+        return 0;
+    case WM_CLOSE:
+    case WM_RBUTTONUP:
+        Hide();
+        PostMessageW(owner_, WM_APP_PREVIEW_CLOSED, 0, 0);
         return 0;
     case WM_PAINT:
         Paint();
         return 0;
+    case WM_NCDESTROY: {
+        HWND destroyed = hwnd_;
+        hwnd_ = nullptr;
+        return DefWindowProcW(destroyed, message, wParam, lParam);
+    }
     default:
         break;
     }

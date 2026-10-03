@@ -24,9 +24,9 @@ std::shared_ptr<ImageData> CropImage(const std::shared_ptr<ImageData>& image, co
 HICON CreateFrameSnapAppIcon(int size);
 void WriteMetricsLog(const CaptureMetrics& metrics, const ImageData& image);
 bool IsRunAtStartupEnabled();
-bool SetRunAtStartup(bool enabled, bool backgroundLaunch = true);
+bool SetRunAtStartup(bool enabled);
 bool IsPrintScreenSnippingEnabled();
-bool SetPrintScreenSnippingEnabled(bool enabled);
+void RotateLog(const std::filesystem::path& path);
 
 template <typename T>
 constexpr T Clamp(T value, T minValue, T maxValue) {

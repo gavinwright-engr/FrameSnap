@@ -7,7 +7,7 @@ class ImageIo {
 public:
     ImageIo();
 
-    bool SavePng(const ImageData& image, const std::wstring& path);
+    bool SavePng(const ImageData& image, const std::wstring& path, bool replaceExisting = false);
     std::vector<std::uint8_t> EncodePng(const ImageData& image);
 
 private:

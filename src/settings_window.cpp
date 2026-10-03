@@ -37,7 +37,7 @@ enum ControlId {
     ControlClickMode,
     ControlSound,
     ControlStartup,
-    ControlPrintScreenOverride,
+    ControlWindowsKeyboardSettings,
     ControlFolderEdit,
     ControlFolderBrowse,
     ControlHotkeyPreview,
@@ -79,13 +79,7 @@ void DrawRoundedCard(HDC hdc, const RECT& rect, COLORREF fill, COLORREF border, 
     DeleteObject(pen);
 }
 
-bool IsCheckboxControlId(UINT controlId) {
-    return controlId == ControlAutoSave ||
-           controlId == ControlClickMode ||
-           controlId == ControlSound ||
-           controlId == ControlStartup ||
-           controlId == ControlPrintScreenOverride;
-}
+
 
 }  // namespace
 
@@ -93,6 +87,7 @@ SettingsWindow::SettingsWindow(HINSTANCE instance, HWND owner)
     : instance_(instance), owner_(owner) {}
 
 SettingsWindow::~SettingsWindow() {
+    if (IsWindow(hwnd_)) DestroyWindow(hwnd_);
     StopRecordingHook();
     if (uiFont_ != nullptr) {
         DeleteObject(uiFont_);
@@ -120,7 +115,7 @@ void SettingsWindow::ResetWindowHandles() {
     clickModeCheckbox_ = nullptr;
     soundCheckbox_ = nullptr;
     startupCheckbox_ = nullptr;
-    printScreenOverrideCheckbox_ = nullptr;
+    keyboardSettingsButton_ = nullptr;
     folderEdit_ = nullptr;
     browseButton_ = nullptr;
     hotkeyPreview_ = nullptr;
@@ -294,12 +289,12 @@ bool SettingsWindow::EnsureWindow() {
 
 void SettingsWindow::CreateControls() {
     hotkeyHint_ = CreateWindowW(L"STATIC",
-        L"Capture key or combo. Print Screen-style keys are supported here too.",
+        L"Shortcut for background mode. For on-demand mode, use your Windows shortcut hotkey.",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
 
     hotkeyPreview_ = CreateWindowW(L"EDIT", L"",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | ES_READONLY,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL | ES_READONLY,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlHotkeyPreview), instance_, nullptr);
 
     hotkeyStatus_ = CreateWindowW(L"STATIC", L"",
@@ -307,70 +302,70 @@ void SettingsWindow::CreateControls() {
         0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
 
     recordHotkeyButton_ = CreateWindowW(L"BUTTON", L"Record Hotkey",
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlRecordHotkey), instance_, nullptr);
 
-    printScreenOverrideCheckbox_ = CreateWindowW(L"BUTTON", L"Let FrameSnap own Print Screen",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_OWNERDRAW,
-        0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlPrintScreenOverride), instance_, nullptr);
+    keyboardSettingsButton_ = CreateWindowW(L"BUTTON", L"Windows keyboard settings",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlWindowsKeyboardSettings), instance_, nullptr);
 
     printScreenStatus_ = CreateWindowW(L"STATIC", L"",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
 
     hotkeyNote_ = CreateWindowW(L"STATIC",
-        L"If Windows still opens Snipping Tool first, turn off Bluetooth & devices > Keyboard > Use the Print Screen key to open screen snipping, or set HKCU\\Control Panel\\Keyboard\\PrintScreenKeyForSnippingEnabled = 0.",
+        L"Ctrl+Alt+S avoids Windows screen-snipping shortcuts. FrameSnap never changes your Windows Print Screen preference.",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
 
     clickModeCheckbox_ = CreateWindowW(L"BUTTON", L"Click-click rectangle mode",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_OWNERDRAW,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlClickMode), instance_, nullptr);
 
     soundCheckbox_ = CreateWindowW(L"BUTTON", L"Play capture sounds",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_OWNERDRAW,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlSound), instance_, nullptr);
 
     previewEdit_ = CreateWindowW(L"EDIT", L"",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_NUMBER,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlPreviewEdit), instance_, nullptr);
 
     thresholdEdit_ = CreateWindowW(L"EDIT", L"",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_NUMBER,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlThresholdEdit), instance_, nullptr);
 
     autoSaveCheckbox_ = CreateWindowW(L"BUTTON", L"Auto-save every capture",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_OWNERDRAW,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlAutoSave), instance_, nullptr);
 
     folderEdit_ = CreateWindowW(L"EDIT", L"",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlFolderEdit), instance_, nullptr);
 
     browseButton_ = CreateWindowW(L"BUTTON", L"Browse",
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlFolderBrowse), instance_, nullptr);
 
     startupCheckbox_ = CreateWindowW(L"BUTTON", L"Start FrameSnap when I sign in",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_OWNERDRAW,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlStartup), instance_, nullptr);
 
     appModeHint_ = CreateWindowW(L"STATIC",
-        L"Manual launch opens this window. Startup is off unless you enable it here.",
+        L"Opening FrameSnap captures once and exits. Sign-in startup is optional and stays quiet in the tray.",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
 
     idleHint_ = CreateWindowW(L"STATIC",
-        L"Close exits FrameSnap. Minimize keeps it ready in the background.",
+        L"Close quits FrameSnap. Use Run in background from Start for a resident hotkey listener.",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
         0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
 
     saveButton_ = CreateWindowW(L"BUTTON", L"Save Settings",
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlSaveButton), instance_, nullptr);
 
     exitButton_ = CreateWindowW(L"BUTTON", L"Exit FrameSnap",
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(ControlExitButton), instance_, nullptr);
 
     const std::array<HWND, 4> edits{hotkeyPreview_, previewEdit_, thresholdEdit_, folderEdit_};
@@ -381,7 +376,7 @@ void SettingsWindow::CreateControls() {
 
 void SettingsWindow::ApplyFonts() {
     const std::array<HWND, 16> controls{
-        hotkeyHint_, hotkeyPreview_, hotkeyStatus_, recordHotkeyButton_, printScreenOverrideCheckbox_, printScreenStatus_,
+        hotkeyHint_, hotkeyPreview_, hotkeyStatus_, recordHotkeyButton_, keyboardSettingsButton_, printScreenStatus_,
         hotkeyNote_, autoSaveCheckbox_, clickModeCheckbox_, soundCheckbox_, startupCheckbox_, appModeHint_,
         folderEdit_, browseButton_, idleHint_, exitButton_
     };
@@ -421,7 +416,7 @@ void SettingsWindow::LayoutControls() {
     MoveWindow(hotkeyPreview_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 2, previewWidth, kFieldHeight, TRUE);
     MoveWindow(recordHotkeyButton_, hotkeyPanelRect_.right - panelPadding - recordButtonWidth, hotkeyContentTop, recordButtonWidth, kButtonHeight, TRUE);
     MoveWindow(hotkeyStatus_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 48, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 24, TRUE);
-    MoveWindow(printScreenOverrideCheckbox_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 84, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 30, TRUE);
+    MoveWindow(keyboardSettingsButton_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 84, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 30, TRUE);
     MoveWindow(printScreenStatus_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 120, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 24, TRUE);
     MoveWindow(hotkeyNote_, hotkeyPanelRect_.left + panelPadding, hotkeyContentTop + 150, hotkeyPanelRect_.right - hotkeyPanelRect_.left - panelPadding * 2, 56, TRUE);
 
@@ -450,7 +445,6 @@ void SettingsWindow::LayoutControls() {
 void SettingsWindow::LoadSettings(const AppSettings& settings) {
     pendingHotkey_ = settings.hotkey;
     Button_SetCheck(startupCheckbox_, settings.runAtStartupEnabled ? BST_CHECKED : BST_UNCHECKED);
-    Button_SetCheck(printScreenOverrideCheckbox_, settings.printScreenOverrideEnabled ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(autoSaveCheckbox_, settings.autoSaveEnabled ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(clickModeCheckbox_, settings.clickModeEnabled ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(soundCheckbox_, settings.soundEnabled ? BST_CHECKED : BST_UNCHECKED);
@@ -463,17 +457,14 @@ void SettingsWindow::LoadSettings(const AppSettings& settings) {
 AppSettings SettingsWindow::ReadSettings() const {
     AppSettings settings{};
     settings.runAtStartupEnabled = Button_GetCheck(startupCheckbox_) == BST_CHECKED;
-    settings.printScreenOverrideEnabled = Button_GetCheck(printScreenOverrideCheckbox_) == BST_CHECKED;
     settings.autoSaveEnabled = Button_GetCheck(autoSaveCheckbox_) == BST_CHECKED;
     settings.clickModeEnabled = Button_GetCheck(clickModeCheckbox_) == BST_CHECKED;
     settings.soundEnabled = Button_GetCheck(soundCheckbox_) == BST_CHECKED;
     settings.saveFolder = ReadWindowText(folderEdit_);
-    settings.previewTimeoutMs = static_cast<UINT>(_wtoi(ReadWindowText(previewEdit_).c_str()));
-    settings.dragThresholdPx = static_cast<UINT>(_wtoi(ReadWindowText(thresholdEdit_).c_str()));
+    settings.previewTimeoutMs = static_cast<UINT>(std::clamp(_wtoi(ReadWindowText(previewEdit_).c_str()), 500, 30000));
+    settings.dragThresholdPx = static_cast<UINT>(std::clamp(_wtoi(ReadWindowText(thresholdEdit_).c_str()), 1, 64));
     settings.hotkey = pendingHotkey_;
 
-    settings.previewTimeoutMs = settings.previewTimeoutMs == 0 ? 3000 : settings.previewTimeoutMs;
-    settings.dragThresholdPx = settings.dragThresholdPx == 0 ? 4 : settings.dragThresholdPx;
     if (settings.saveFolder.empty()) {
         settings.saveFolder = util::DefaultSaveFolder().wstring();
     }
@@ -646,58 +637,6 @@ void SettingsWindow::DrawActionButton(const DRAWITEMSTRUCT& drawItem) const {
     DrawTextW(drawItem.hDC, label.c_str(), -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
-void SettingsWindow::DrawCheckbox(const DRAWITEMSTRUCT& drawItem) const {
-    const bool checked = SendMessageW(drawItem.hwndItem, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    const bool pressed = (drawItem.itemState & ODS_SELECTED) != 0;
-    const bool focused = (drawItem.itemState & ODS_FOCUS) != 0;
-    const bool disabled = (drawItem.itemState & ODS_DISABLED) != 0;
-
-    FillSolidRect(drawItem.hDC, drawItem.rcItem, kPanelColor);
-
-    const int boxSize = 18;
-    const int boxLeft = drawItem.rcItem.left;
-    const int boxTop = drawItem.rcItem.top + ((drawItem.rcItem.bottom - drawItem.rcItem.top - boxSize) / 2);
-    const RECT boxRect = RectWithSize(boxLeft, boxTop, boxSize, boxSize);
-
-    COLORREF fill = checked ? kAccentColor : kFieldColor;
-    COLORREF border = checked ? kAccentBorderColor : kFieldBorderColor;
-    if (pressed) {
-        fill = checked ? kAccentPressedColor : RGB(24, 31, 42);
-    }
-    if (disabled) {
-        fill = RGB(24, 31, 42);
-        border = RGB(42, 52, 68);
-    }
-
-    HBRUSH boxBrush = CreateSolidBrush(fill);
-    HPEN boxPen = CreatePen(PS_SOLID, focused ? 2 : 1, border);
-    HGDIOBJ oldBrush = SelectObject(drawItem.hDC, boxBrush);
-    HGDIOBJ oldPen = SelectObject(drawItem.hDC, boxPen);
-    RoundRect(drawItem.hDC, boxRect.left, boxRect.top, boxRect.right, boxRect.bottom, 5, 5);
-    SelectObject(drawItem.hDC, oldBrush);
-    SelectObject(drawItem.hDC, oldPen);
-    DeleteObject(boxBrush);
-    DeleteObject(boxPen);
-
-    if (checked) {
-        HPEN checkPen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
-        HGDIOBJ oldCheckPen = SelectObject(drawItem.hDC, checkPen);
-        MoveToEx(drawItem.hDC, boxLeft + 4, boxTop + 9, nullptr);
-        LineTo(drawItem.hDC, boxLeft + 8, boxTop + 13);
-        LineTo(drawItem.hDC, boxLeft + 14, boxTop + 5);
-        SelectObject(drawItem.hDC, oldCheckPen);
-        DeleteObject(checkPen);
-    }
-
-    SetBkMode(drawItem.hDC, TRANSPARENT);
-    SetTextColor(drawItem.hDC, disabled ? kMutedColor : kBodyColor);
-    SelectObject(drawItem.hDC, uiFont_);
-    RECT textRect = drawItem.rcItem;
-    textRect.left += boxSize + 8;
-    const std::wstring label = ReadWindowText(drawItem.hwndItem);
-    DrawTextW(drawItem.hDC, label.c_str(), -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-}
-
 void SettingsWindow::Show(const AppSettings& settings, const std::wstring& hotkeyStatus, const std::wstring& printScreenStatus, int showCommand) {
     if (!EnsureWindow()) {
         return;
@@ -716,6 +655,21 @@ void SettingsWindow::Show(const AppSettings& settings, const std::wstring& hotke
     }
 }
 
+bool SettingsWindow::HandleAccelerator(const MSG& message) {
+    if (recordingHotkey_ || !IsWindowVisible(hwnd_) || (message.hwnd != hwnd_ && !IsChild(hwnd_, message.hwnd))) return false;
+    if (message.message == WM_KEYDOWN && message.wParam == VK_ESCAPE) {
+        PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+        return true;
+    }
+    MSG copy = message;
+    return IsDialogMessageW(hwnd_, &copy) != FALSE;
+}
+
+void SettingsWindow::Hide() {
+    SetRecordingHotkey(false);
+    if (IsWindow(hwnd_)) ShowWindow(hwnd_, SW_HIDE);
+}
+
 HWND SettingsWindow::Handle() const {
     return hwnd_;
 }
@@ -725,8 +679,9 @@ LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT message, WPARAM wParam,
     if (message == WM_NCCREATE) {
         const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
         self = static_cast<SettingsWindow*>(create->lpCreateParams);
+        self->hwnd_ = hwnd;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
-        return TRUE;
+        return DefWindowProcW(hwnd, message, wParam, lParam);
     }
     return self != nullptr ? self->HandleMessage(message, wParam, lParam) : DefWindowProcW(hwnd, message, wParam, lParam);
 }
@@ -758,7 +713,11 @@ LRESULT SettingsWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam
         info->ptMinTrackSize.y = kWindowMinHeight;
         return 0;
     }
+    case WM_ACTIVATE:
+        if (LOWORD(wParam) == WA_INACTIVE) SetRecordingHotkey(false);
+        break;
     case WM_SIZE:
+        if (wParam == SIZE_MINIMIZED) { SetRecordingHotkey(false); ShowWindow(hwnd_, SW_HIDE); return 0; }
         LayoutControls();
         InvalidateRect(hwnd_, nullptr, FALSE);
         return 0;
@@ -773,12 +732,8 @@ LRESULT SettingsWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam
     case WM_DRAWITEM: {
         auto* drawItem = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
         if (drawItem != nullptr) {
-            if (IsCheckboxControlId(drawItem->CtlID)) {
-                DrawCheckbox(*drawItem);
-                return TRUE;
-            }
             if (drawItem->CtlID == ControlRecordHotkey || drawItem->CtlID == ControlFolderBrowse || drawItem->CtlID == ControlSaveButton ||
-                drawItem->CtlID == ControlExitButton) {
+                drawItem->CtlID == ControlExitButton || drawItem->CtlID == ControlWindowsKeyboardSettings) {
                 DrawActionButton(*drawItem);
                 return TRUE;
             }
@@ -815,7 +770,7 @@ LRESULT SettingsWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam
         SelectObject(backDc, hintFont_);
         SetTextColor(backDc, kBodyColor);
         RECT subtitleRect = RectWithSize(kOuterPadding, 54, client.right - kOuterPadding * 2, 22);
-        DrawTextW(backDc, L"Shell, hotkeys, startup, and Print Screen ownership in one place.", -1, &subtitleRect,
+        DrawTextW(backDc, L"Capture a region, copy it, and get back to work.", -1, &subtitleRect,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         SelectObject(backDc, uiFont_);
@@ -875,10 +830,12 @@ LRESULT SettingsWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam
         case ControlClickMode:
         case ControlSound:
         case ControlStartup:
-        case ControlPrintScreenOverride:
             if (reinterpret_cast<HWND>(lParam) != nullptr) {
                 InvalidateRect(reinterpret_cast<HWND>(lParam), nullptr, FALSE);
             }
+            return 0;
+        case ControlWindowsKeyboardSettings:
+            ShellExecuteW(hwnd_, L"open", L"ms-settings:easeofaccess-keyboard", nullptr, nullptr, SW_SHOWNORMAL);
             return 0;
         case ControlFolderBrowse:
             BrowseForFolder();
@@ -888,7 +845,7 @@ LRESULT SettingsWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam
             return 0;
         case ControlSaveButton: {
             auto settings = std::make_unique<AppSettings>(ReadSettings());
-            PostMessageW(owner_, WM_APP_SETTINGS_APPLIED, 0, reinterpret_cast<LPARAM>(settings.release()));
+            if (PostMessageW(owner_, WM_APP_SETTINGS_APPLIED, 0, reinterpret_cast<LPARAM>(settings.get()))) settings.release();
             return 0;
         }
         case ControlExitButton:

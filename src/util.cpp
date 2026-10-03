@@ -4,13 +4,6 @@ namespace util {
 
 namespace {
 
-constexpr std::array<const wchar_t*, 4> kStartupValueNames{
-    L"FrameSnap",
-    L"Screenshotter",
-    L"HotSnap",
-    L"OneShot",
-};
-
 struct GdiSnapshotCache {
     HDC memoryDc{};
     HBITMAP bitmap{};
@@ -31,11 +24,6 @@ struct GdiSnapshotCache {
         }
     }
 };
-
-GdiSnapshotCache& SnapshotCache() {
-    static GdiSnapshotCache cache;
-    return cache;
-}
 
 bool EnsureSnapshotCache(HDC screenDc, int width, int height, GdiSnapshotCache& cache) {
     if (cache.memoryDc == nullptr) {
@@ -163,18 +151,13 @@ std::wstring HotkeyLabel(const HotkeyBinding& binding) {
 }
 
 std::wstring TimestampedFileName(const ImageData& image) {
+    static std::atomic<unsigned long long> sequence{0};
     SYSTEMTIME st{};
     GetLocalTime(&st);
-    wchar_t buffer[128]{};
-    swprintf_s(buffer, L"%04u-%02u-%02u_%02u-%02u-%02u_%dx%d.png",
-        st.wYear,
-        st.wMonth,
-        st.wDay,
-        st.wHour,
-        st.wMinute,
-        st.wSecond,
-        image.width,
-        image.height);
+    wchar_t buffer[160]{};
+    swprintf_s(buffer, L"%04u-%02u-%02u_%02u-%02u-%02u_%03u_%lu_%llu_%dx%d.png",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+        GetCurrentProcessId(), sequence.fetch_add(1), image.width, image.height);
     return buffer;
 }
 
@@ -202,8 +185,6 @@ std::filesystem::path DefaultSaveFolder() {
         result = std::filesystem::path(path) / L"FrameSnap";
         CoTaskMemFree(path);
     }
-    std::error_code error;
-    std::filesystem::create_directories(result, error);
     return result;
 }
 
@@ -252,14 +233,19 @@ std::shared_ptr<ImageData> CaptureScreenSnapshotGdi(const RECT& bounds) {
         return nullptr;
     }
 
-    const int width = normalized.right - normalized.left;
-    const int height = normalized.bottom - normalized.top;
+    const auto wideWidth = static_cast<long long>(normalized.right) - normalized.left;
+    const auto wideHeight = static_cast<long long>(normalized.bottom) - normalized.top;
+    if (wideWidth > static_cast<long long>(kMaxImageBytes / 4) || wideHeight > static_cast<long long>(kMaxImageBytes / 4)) return nullptr;
+    const int width = static_cast<int>(wideWidth);
+    const int height = static_cast<int>(wideHeight);
+    const auto imageBytes = ImageByteSize(width, height);
+    if (!imageBytes) return nullptr;
     HDC screenDc = GetDC(nullptr);
     if (screenDc == nullptr) {
         return nullptr;
     }
 
-    auto& cache = SnapshotCache();
+    GdiSnapshotCache cache; // Release desktop pixels and GDI storage after this capture.
     if (!EnsureSnapshotCache(screenDc, width, height, cache)) {
         ReleaseDC(nullptr, screenDc);
         return nullptr;
@@ -272,8 +258,10 @@ std::shared_ptr<ImageData> CaptureScreenSnapshotGdi(const RECT& bounds) {
         image->height = height;
         image->hdrSource = false;
         image->sourceRect = normalized;
-        image->pixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 4U);
+        image->pixels.resize(*imageBytes);
         memcpy(image->pixels.data(), cache.bits, image->pixels.size());
+        // GDI does not initialize alpha. Screenshots must be opaque in the editor, PNG, and clipboard.
+        for (std::size_t offset = 3; offset < image->pixels.size(); offset += 4) image->pixels[offset] = 255;
     }
 
     ReleaseDC(nullptr, screenDc);
@@ -281,9 +269,9 @@ std::shared_ptr<ImageData> CaptureScreenSnapshotGdi(const RECT& bounds) {
 }
 
 std::shared_ptr<ImageData> CropImage(const std::shared_ptr<ImageData>& image, const RECT& selection) {
-    if (image == nullptr) {
-        return nullptr;
-    }
+    if (image == nullptr || !image->IsValid() ||
+        static_cast<long long>(image->sourceRect.right) - image->sourceRect.left != image->width ||
+        static_cast<long long>(image->sourceRect.bottom) - image->sourceRect.top != image->height) return nullptr;
     const RECT normalized = NormalizeRect(selection);
     const RECT clipped = IntersectRectSafe(normalized, image->sourceRect);
     if (IsRectEmptySafe(clipped)) {
@@ -348,8 +336,20 @@ HICON CreateFrameSnapAppIcon(int size) {
     return icon;
 }
 
+void RotateLog(const std::filesystem::path& path) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    if (error || size < 256 * 1024) return;
+    auto previous = path;
+    previous += L".previous";
+    std::filesystem::remove(previous, error);
+    error.clear();
+    std::filesystem::rename(path, previous, error);
+}
+
 void WriteMetricsLog(const CaptureMetrics& metrics, const ImageData& image) {
     auto path = EnsureAppDirectory() / L"metrics.log";
+    RotateLog(path);
     std::wofstream stream(path, std::ios::app);
     if (!stream.is_open()) {
         return;
@@ -383,7 +383,7 @@ bool IsRunAtStartupEnabled() {
     const LONG result = RegGetValueW(
         key,
         nullptr,
-        kStartupValueNames.front(),
+        L"FrameSnap",
         RRF_RT_REG_SZ,
         &type,
         nullptr,
@@ -392,44 +392,31 @@ bool IsRunAtStartupEnabled() {
     return result == ERROR_SUCCESS && type == REG_SZ && size > sizeof(wchar_t);
 }
 
-bool SetRunAtStartup(bool enabled, bool backgroundLaunch) {
+bool SetRunAtStartup(bool enabled) {
+    constexpr auto runKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    // Touch only this application's entry, never another screenshot product's.
+    if (!enabled) {
+        HKEY key = nullptr;
+        const LONG opened = RegOpenKeyExW(HKEY_CURRENT_USER, runKey, 0, KEY_SET_VALUE, &key);
+        if (opened == ERROR_FILE_NOT_FOUND) return true;
+        if (opened != ERROR_SUCCESS) return false;
+        const LONG removed = RegDeleteValueW(key, L"FrameSnap");
+        RegCloseKey(key);
+        return removed == ERROR_SUCCESS || removed == ERROR_FILE_NOT_FOUND;
+    }
+    std::wstring executable(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+    if (length == 0 || length >= executable.size()) return false;
+    executable.resize(length);
+    const std::wstring command = L"\"" + executable + L"\" --background";
+    // The documented Run value limit is 260 characters, including arguments.
+    if (command.size() >= 260) return false;
     HKEY key = nullptr;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER,
-            L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-            0,
-            nullptr,
-            REG_OPTION_NON_VOLATILE,
-            KEY_SET_VALUE,
-            nullptr,
-            &key,
-            nullptr) != ERROR_SUCCESS) {
-        return false;
-    }
-
-    wchar_t exePath[MAX_PATH]{};
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    bool success = false;
-    for (const wchar_t* valueName : kStartupValueNames) {
-        RegDeleteValueW(key, valueName);
-    }
-    if (enabled) {
-        std::wstring command = L"\"";
-        command += exePath;
-        command += L"\"";
-        if (backgroundLaunch) {
-            command += L" --background";
-        }
-        success = RegSetValueExW(key,
-                      L"FrameSnap",
-                      0,
-                      REG_SZ,
-                      reinterpret_cast<const BYTE*>(command.c_str()),
-                      static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
-    } else {
-        success = true;
-    }
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, runKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) return false;
+    const LONG written = RegSetValueExW(key, L"FrameSnap", 0, REG_SZ,
+        reinterpret_cast<const BYTE*>(command.c_str()), static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)));
     RegCloseKey(key);
-    return success;
+    return written == ERROR_SUCCESS;
 }
 
 bool IsPrintScreenSnippingEnabled() {
@@ -447,40 +434,6 @@ bool IsPrintScreenSnippingEnabled() {
         return true;
     }
     return value != 0;
-}
-
-bool SetPrintScreenSnippingEnabled(bool enabled) {
-    HKEY key = nullptr;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER,
-            L"Control Panel\\Keyboard",
-            0,
-            nullptr,
-            REG_OPTION_NON_VOLATILE,
-            KEY_SET_VALUE,
-            nullptr,
-            &key,
-            nullptr) != ERROR_SUCCESS) {
-        return false;
-    }
-
-    const DWORD value = enabled ? 1U : 0U;
-    const bool success = RegSetValueExW(key,
-                             L"PrintScreenKeyForSnippingEnabled",
-                             0,
-                             REG_DWORD,
-                             reinterpret_cast<const BYTE*>(&value),
-                             sizeof(value)) == ERROR_SUCCESS;
-    RegCloseKey(key);
-    if (success) {
-        SendMessageTimeoutW(HWND_BROADCAST,
-            WM_SETTINGCHANGE,
-            0,
-            reinterpret_cast<LPARAM>(L"Control Panel\\Keyboard"),
-            SMTO_ABORTIFHUNG,
-            200,
-            nullptr);
-    }
-    return success;
 }
 
 }  // namespace util

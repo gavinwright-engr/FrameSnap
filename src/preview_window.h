@@ -8,7 +8,7 @@ public:
     PreviewWindow(HINSTANCE instance, HWND owner);
     ~PreviewWindow();
 
-    void Show(const std::shared_ptr<ImageData>& image, UINT timeoutMs);
+    bool Show(const std::shared_ptr<ImageData>& image, UINT timeoutMs);
     void Hide();
     std::shared_ptr<ImageData> CurrentImage() const;
 
