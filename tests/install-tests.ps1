@@ -32,7 +32,10 @@ try {
     # parameter-default PSScriptRoot initialization behavior.
     Push-Location ([IO.Path]::GetTempPath())
     try {
-        & (Join-Path $stage 'Install.cmd')
+        & (Join-Path $stage 'Install.cmd') 2>&1 | Tee-Object -Variable launcherOutput
+        if ($LASTEXITCODE -ne 0) {
+            throw "Install.cmd failed with exit code $LASTEXITCODE`n$($launcherOutput -join "`n")"
+        }
         Assert-True ($LASTEXITCODE -eq 0) 'Install.cmd succeeds through Windows PowerShell from another directory'
     } finally {
         Pop-Location
@@ -65,7 +68,10 @@ try {
     Assert-True ((Get-ItemProperty -Path $runKey -Name $sentinel).$sentinel -eq 'Unrelated startup entry - do not remove') 'Unrelated startup values are preserved'
     $settings = Join-Path $env:LOCALAPPDATA 'FrameSnap\settings.ini'
     $hadSettings = Test-Path -LiteralPath $settings
-    & (Join-Path $installDir 'Uninstall.cmd')
+    & (Join-Path $installDir 'Uninstall.cmd') 2>&1 | Tee-Object -Variable launcherOutput
+    if ($LASTEXITCODE -ne 0) {
+        throw "Uninstall.cmd failed with exit code $LASTEXITCODE`n$($launcherOutput -join "`n")"
+    }
     Assert-True ($LASTEXITCODE -eq 0) 'Uninstall.cmd succeeds through Windows PowerShell'
     Assert-True (-not (Test-Path -LiteralPath $target)) 'Uninstall removes the executable'
     Assert-True (-not (Test-Path -LiteralPath $uninstallKey)) 'Uninstall removes only its Installed apps entry'
