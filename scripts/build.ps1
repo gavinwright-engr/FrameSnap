@@ -7,6 +7,13 @@ param(
     [switch]$Test
 )
 $ErrorActionPreference = 'Stop'
+function Write-CiFailure([string]$Title, [object[]]$Output) {
+    if ($env:GITHUB_ACTIONS -ne 'true') { return }
+    # Surface tool failures on the run summary as well as in authenticated logs.
+    $details = ($Output | Select-Object -Last 80 | ForEach-Object { $_.ToString() }) -join "`n"
+    $details = $details.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+    Write-Host "::error title=$Title::$details"
+}
 $root = Split-Path -Parent $PSScriptRoot
 $build = Join-Path $root 'out\build-msvc'
 $cmake = Get-Command cmake -ErrorAction SilentlyContinue
@@ -19,14 +26,23 @@ if (-not $cmake) {
 }
 if (-not $cmake) { throw 'Install Visual Studio 2022 or later with Desktop development with C++ and CMake tools, or add CMake 3.25+ to PATH.' }
 $cmakeExe = if ($cmake.Source) { $cmake.Source } else { $cmake.FullName }
-& $cmakeExe -S $root -B $build -A x64 -DBUILD_TESTING=ON
-if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed. Use the Visual Studio C++ toolchain with the Windows SDK.' }
-& $cmakeExe --build $build --config $Configuration --parallel 4
-if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+& $cmakeExe -S $root -B $build -A x64 -DBUILD_TESTING=ON 2>&1 | Tee-Object -Variable configureOutput
+if ($LASTEXITCODE -ne 0) {
+    Write-CiFailure 'CMake configuration failed' $configureOutput
+    throw 'CMake configuration failed. Use the Visual Studio C++ toolchain with the Windows SDK.'
+}
+& $cmakeExe --build $build --config $Configuration --parallel 4 2>&1 | Tee-Object -Variable buildOutput
+if ($LASTEXITCODE -ne 0) {
+    Write-CiFailure 'Build failed' $buildOutput
+    throw 'Build failed.'
+}
 if ($Test) {
     $ctest = Join-Path (Split-Path $cmakeExe) 'ctest.exe'
-    & $ctest --test-dir $build -C $Configuration --output-on-failure
-    if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
+    & $ctest --test-dir $build -C $Configuration --output-on-failure 2>&1 | Tee-Object -Variable testOutput
+    if ($LASTEXITCODE -ne 0) {
+        Write-CiFailure 'Tests failed' $testOutput
+        throw 'Tests failed.'
+    }
 }
 if (-not $OutputDir) { $OutputDir = Join-Path 'out' $Configuration }
 $output = if ([IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $root $OutputDir }
